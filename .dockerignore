@@ -1,0 +1,6 @@
+web
+.git
+*.md
+.env
+.env.*
+/tmp

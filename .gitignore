@@ -1,0 +1,15 @@
+# Go
+/panel
+/tmp/awgpanel
+
+# Node / Next
+web/node_modules
+web/.next
+web/out
+
+# env / secrets
+.env
+.env.local
+
+# editor
+.DS_Store

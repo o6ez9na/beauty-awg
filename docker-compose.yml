@@ -1,0 +1,71 @@
+# beautifulwg — full stack.
+#
+# Topology note: `backend` runs in the HOST network namespace with NET_ADMIN so
+# it can create/manage the awg0 interface and nftables rules on the host itself.
+# The AmneziaWG kernel module (or amneziawg-go) MUST be present on the HOST.
+# The host must also have net.ipv4.ip_forward=1.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: awg
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: awg
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Publish on loopback only so the host-network backend can reach it at
+    # localhost:5432 without exposing Postgres to the outside.
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U awg -d awg"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DATABASE_URL: postgres://awg:${DB_PASSWORD:-changeme}@localhost:5432/awg?sslmode=disable
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      LISTEN_ADDR: ":8080"
+      AWG_IFACE: awg0
+      AWG_CONF_DIR: /etc/amnezia/amneziawg
+      AWG_NFT_FILE: /etc/awgpanel/acl.nft
+      HUB_ENDPOINT: ${HUB_ENDPOINT:?public IP:port, e.g. 203.0.113.10:51820}
+      HUB_LISTEN_PORT: "51820"
+      HUB_POOL_CIDR: ${HUB_POOL_CIDR:-10.8.0.0/24}
+      HUB_ADDRESS: ${HUB_ADDRESS:-10.8.0.1}
+      HUB_DNS: ${HUB_DNS:-}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      # Cookies are sent over plain HTTP unless you terminate TLS in front.
+      INSECURE_COOKIES: ${INSECURE_COOKIES:-1}
+    volumes:
+      - /etc/amnezia:/etc/amnezia
+      - /lib/modules:/lib/modules:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    network_mode: host
+    environment:
+      BACKEND_URL: http://localhost:8080
+      PORT: "3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
