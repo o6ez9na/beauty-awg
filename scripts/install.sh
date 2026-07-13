@@ -69,26 +69,42 @@ fi
 [ "$MODE" = panel ] || [ "$MODE" = node ] || die "MODE must be panel or node (got: $MODE)"
 info "installing mode: $(c '1;36' "$MODE")"
 
-# --- AmneziaWG (kernel module + userspace tools) ---------------------------
-install_amneziawg() {
-  if command -v awg >/dev/null 2>&1 && awg-quick --help >/dev/null 2>&1; then
+# --- AmneziaWG -------------------------------------------------------------
+# Built from source via DKMS so it works on Debian AND Ubuntu (the Ubuntu-only
+# PPA is deliberately avoided). The panel needs only the kernel module on the
+# host (awg/awg-quick run inside the backend container); a node needs both.
+
+install_awg_module() {
+  if modinfo amneziawg >/dev/null 2>&1; then
+    ok "amneziawg kernel module already present"; return
+  fi
+  info "building AmneziaWG kernel module (DKMS)"
+  case "$PKG" in
+    apt) pkg_install dkms git build-essential "linux-headers-$(uname -r)" ;;
+    dnf) pkg_install dkms git make gcc "kernel-devel-$(uname -r)" || pkg_install dkms git make gcc kernel-devel ;;
+  esac
+  local tmp; tmp="$(mktemp -d)"
+  git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git "$tmp/mod"
+  make -C "$tmp/mod" dkms-install \
+    || die "kernel module build failed (need matching linux-headers for $(uname -r))"
+  rm -rf "$tmp"
+  modprobe amneziawg || warn "module built but modprobe failed; a reboot may be required"
+}
+
+install_awg_tools() {
+  if command -v awg-quick >/dev/null 2>&1; then
     ok "amneziawg tools already present"; return
   fi
-  info "installing AmneziaWG (kernel module + tools)"
+  info "building AmneziaWG tools (awg, awg-quick)"
   case "$PKG" in
-    apt)
-      pkg_install software-properties-common ca-certificates
-      add-apt-repository -y ppa:amnezia/ppa
-      apt-get update
-      pkg_install amneziawg amneziawg-tools
-      ;;
-    dnf)
-      pkg_install dnf-plugins-core
-      dnf copr enable -y amneziavpn/amneziawg || warn "copr enable failed; install amneziawg manually"
-      pkg_install amneziawg-dkms amneziawg-tools || warn "package install failed; see amnezia-vpn/amneziawg-linux-kernel-module"
-      ;;
+    apt) pkg_install git build-essential libmnl-dev bash iproute2 ;;
+    dnf) pkg_install git make gcc libmnl-devel bash iproute ;;
   esac
-  modprobe amneziawg 2>/dev/null || warn "could not load amneziawg module now (reboot may be required)"
+  local tmp; tmp="$(mktemp -d)"
+  git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools.git "$tmp/tools"
+  make -C "$tmp/tools/src"
+  make -C "$tmp/tools/src" install
+  rm -rf "$tmp"
 }
 
 enable_forwarding() {
@@ -108,7 +124,7 @@ install_docker() {
 }
 
 install_panel() {
-  install_amneziawg
+  install_awg_module
   enable_forwarding
   install_docker
   pkg_install git
@@ -155,7 +171,8 @@ EOF
 
 # --- node install ----------------------------------------------------------
 install_node() {
-  install_amneziawg
+  install_awg_module
+  install_awg_tools
   enable_forwarding
   mkdir -p "$AWG_CONF_DIR"
 
