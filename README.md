@@ -25,7 +25,7 @@ device's traffic into home LANs that sit behind CGNAT, via a VPS relay.
 One command on a fresh box; it asks whether to install the **panel** or a **node**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/o6ez9na/beautifulwg/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/install.sh | sudo bash
 ```
 
 Non-interactive:
@@ -63,7 +63,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-- Panel UI: `http://<vps>:3000`  (put a TLS reverse proxy in front for prod, then
+- Panel UI: `http://<vps>:3000` (put a TLS reverse proxy in front for prod, then
   set `INSECURE_COOKIES=` empty).
 - Backend API: `http://<vps>:8080` (proxied by the frontend at `/api`).
 

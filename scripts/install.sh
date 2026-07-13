@@ -10,7 +10,7 @@
 #
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/o6ez9na/beautifulwg.git}"
+REPO_URL="${REPO_URL:-https://github.com/o6ez9na/beauty-awg.git}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/beautifulwg}"
 AWG_IFACE="${AWG_IFACE:-awg0}"
 AWG_CONF_DIR="/etc/amnezia/amneziawg"
