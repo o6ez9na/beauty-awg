@@ -276,8 +276,12 @@ jobs:
         run: |
           version="${{ github.event_name == 'release' && github.ref_name || inputs.version }}"
           arch="${{ matrix.arch }}"
-          make -C awg-tools/src -j"$(nproc)"
-          make -C awg-tools/src install DESTDIR="$PWD/stage" PREFIX=/usr
+          # Static-link awg (C) so the prebuilt binary runs on nodes with older
+          # glibc than the runner (Debian 12, Ubuntu 22.04, ...). awg-quick is a
+          # bash script and needs no linking.
+          make -C awg-tools/src -j"$(nproc)" LDFLAGS=-static
+          make -C awg-tools/src install DESTDIR="$PWD/stage" PREFIX=/usr LDFLAGS=-static
+          file stage/usr/bin/awg || true
 
           mkdir -p dist
           cp stage/usr/bin/awg stage/usr/bin/awg-quick dist/

@@ -22,6 +22,15 @@ RUN make -C /awg/src && make -C /awg/src install
 # be shipped alongside the redistributed binaries (GPL-2 section 3).
 RUN tar -czf /amneziawg-tools-src.tar.gz -C / awg
 
+# ---- stage 2b: build amneziawg-go (userspace datapath, fallback only) ----
+# The panel prefers the host kernel module; amneziawg-go is a fallback awg-quick
+# uses automatically when `ip link add ... type amneziawg` fails.
+FROM golang:1.26-bookworm AS awggobuild
+ARG AWG_GO_REF=master
+RUN git clone --depth 1 --branch "$AWG_GO_REF" \
+        https://github.com/amnezia-vpn/amneziawg-go.git /awg-go
+RUN cd /awg-go && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/amneziawg-go .
+
 # ---- stage 3: runtime ----
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=awgtools /usr/bin/awg /usr/bin/awg
 COPY --from=awgtools /usr/bin/awg-quick /usr/bin/awg-quick
+COPY --from=awggobuild /out/amneziawg-go /usr/bin/amneziawg-go
 COPY --from=gobuild /out/panel /usr/local/bin/panel
 
 # --- GPL-2.0 compliance for amneziawg-tools (awg, awg-quick) ---------------
@@ -48,6 +58,9 @@ and is also publicly available upstream:
 Written offer: for three years from the date you received this image you may
 obtain the corresponding source by either means above at no charge.
 EOF
+
+# --- MIT notice for amneziawg-go (userspace datapath fallback) -------------
+COPY --from=awggobuild /awg-go/LICENSE /usr/share/doc/amneziawg-go/LICENSE
 
 # awg config dir (mounted from host so it persists / is visible to host).
 RUN mkdir -p /etc/amnezia/amneziawg /etc/awgpanel

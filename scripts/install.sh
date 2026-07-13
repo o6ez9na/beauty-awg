@@ -211,10 +211,43 @@ install_awg_module() {
   modprobe amneziawg || warn "module installed but modprobe failed; a reboot may be required"
 }
 
-install_awg_tools() {
-  if command -v awg-quick >/dev/null 2>&1; then
-    ok "amneziawg tools already present"; return
+# Download prebuilt awg/awg-quick (a tarball) from our GitHub Releases. The
+# tarball ships COPYING (GPL-2) + a source pointer, laid out under /usr/share/doc.
+download_awg_tools_binary() {
+  local arch; arch="$(nodeagent_arch)" || { warn "no prebuilt awg-tools for arch $(uname -m)"; return 1; }
+  local url
+  if [ -n "${NODEAGENT_VERSION:-}" ]; then
+    url="https://github.com/${REPO_SLUG}/releases/download/${NODEAGENT_VERSION}/amneziawg-tools-${NODEAGENT_VERSION}-linux-${arch}.tar.gz"
+  else
+    info "resolving latest amneziawg-tools release for linux/${arch}"
+    url="$(curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+      | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      | cut -d'"' -f4 \
+      | grep -E "amneziawg-tools-.*-linux-${arch}\.tar\.gz$" \
+      | head -1)"
+    [ -n "$url" ] || { warn "no matching amneziawg-tools asset for linux/${arch}"; return 1; }
   fi
+  # awg-quick is a bash script; awg (C) links libmnl at runtime.
+  case "$PKG" in
+    apt) pkg_install bash iproute2 libmnl0 ;;
+    dnf) pkg_install bash iproute libmnl ;;
+  esac
+  info "downloading $url"
+  local tmp; tmp="$(mktemp -d)"
+  if ! curl -fsSL "$url" -o "$tmp/awg-tools.tar.gz" || ! tar -xzf "$tmp/awg-tools.tar.gz" -C "$tmp"; then
+    warn "download/extract failed"; rm -rf "$tmp"; return 1
+  fi
+  install -m755 "$tmp/awg" /usr/bin/awg
+  install -m755 "$tmp/awg-quick" /usr/bin/awg-quick
+  mkdir -p /usr/share/doc/amneziawg-tools
+  cp "$tmp/COPYING" /usr/share/doc/amneziawg-tools/COPYING 2>/dev/null || true
+  cp "$tmp/README.source" /usr/share/doc/amneziawg-tools/README.source 2>/dev/null || true
+  rm -rf "$tmp"
+  ok "installed prebuilt amneziawg-tools (awg, awg-quick)"
+}
+
+# Build awg/awg-quick from source (GPL-2). Keeps COPYING alongside the binaries.
+build_awg_tools_from_source() {
   info "building AmneziaWG tools (awg, awg-quick)"
   case "$PKG" in
     apt) pkg_install git build-essential libmnl-dev bash iproute2 ;;
@@ -224,7 +257,21 @@ install_awg_tools() {
   git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools.git "$tmp/tools"
   make -C "$tmp/tools/src"
   make -C "$tmp/tools/src" install
+  mkdir -p /usr/share/doc/amneziawg-tools
+  cp "$tmp/tools/COPYING" /usr/share/doc/amneziawg-tools/COPYING 2>/dev/null || true
   rm -rf "$tmp"
+}
+
+# Provide awg + awg-quick: prefer a prebuilt release, fall back to source.
+# NODE_INSTALL_METHOD=source forces a local build.
+install_awg_tools() {
+  if command -v awg-quick >/dev/null 2>&1; then
+    ok "amneziawg tools already present"; return
+  fi
+  if [ "${NODE_INSTALL_METHOD:-}" != source ] && download_awg_tools_binary; then
+    return
+  fi
+  build_awg_tools_from_source
 }
 
 enable_forwarding() {
