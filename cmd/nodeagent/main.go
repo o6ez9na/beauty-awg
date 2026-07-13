@@ -206,10 +206,19 @@ func (a *agent) pollLoop() {
 		a.mu.Unlock()
 
 		if panel != "" && token != "" {
-			status, config, err := poll(panel, token)
-			if err != nil {
-				log.Printf("poll: %v", err)
-			} else {
+			status, config, gone, err := poll(panel, token)
+			switch {
+			case gone:
+				// The panel no longer knows this token: the node was deleted.
+				// Tear the tunnel down, wipe the config, and reset to the
+				// connect form.
+				log.Printf("node removed from panel; tearing down")
+				teardown()
+				a.reset()
+				lastApplied = ""
+			case err != nil:
+				log.Printf("poll: %v", err) // transient (panel down / network) — keep config
+			default:
 				a.mu.Lock()
 				a.status = status
 				a.mu.Unlock()
@@ -230,21 +239,45 @@ func (a *agent) pollLoop() {
 	}
 }
 
-func poll(panel, token string) (status, config string, err error) {
+// poll returns gone=true when the panel reports the token is unknown (404),
+// i.e. the node was deleted from the panel.
+func poll(panel, token string) (status, config string, gone bool, err error) {
 	resp, err := http.Get(panel + "/api/enroll/" + token)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return "", "", true, nil
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("panel said %d", resp.StatusCode)
+		return "", "", false, fmt.Errorf("panel said %d", resp.StatusCode)
 	}
 	var out struct{ Status, Config string }
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
-	return out.Status, out.Config, nil
+	return out.Status, out.Config, false, nil
+}
+
+// teardown brings the interface down and removes the local config.
+func teardown() {
+	exec.Command("awg-quick", "down", iface).Run()
+	_ = os.Remove(confPath)
+	_ = os.Remove(confPath + ".bak")
+}
+
+// reset clears enrollment so the web UI returns to the connect form. The keypair
+// is kept (harmless) so a fresh connect reuses it.
+func (a *agent) reset() {
+	a.mu.Lock()
+	a.st.Token = ""
+	a.st.Panel = ""
+	a.status = ""
+	toSave := a.st
+	a.mu.Unlock()
+	_ = saveState(toSave)
 }
 
 // ---------------- LAN auto-detection ----------------
