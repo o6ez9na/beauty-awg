@@ -85,10 +85,21 @@ install_awg_module() {
   esac
   local tmp; tmp="$(mktemp -d)"
   git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git "$tmp/mod"
-  make -C "$tmp/mod" dkms-install \
-    || die "kernel module build failed (need matching linux-headers for $(uname -r))"
+  local src="$tmp/mod/src"
+  # dkms-install only copies sources to /usr/src/amneziawg-<ver>; register + build after.
+  local ver; ver="$(sed -n 's/.*PACKAGE_VERSION="\([^"]*\)".*/\1/p' "$src/dkms.conf")"
+  ver="${ver:-1.0.0}"
+  make -C "$src" dkms-install
+  dkms add -m amneziawg -v "$ver" 2>/dev/null || true
+  if dkms build -m amneziawg -v "$ver" && dkms install -m amneziawg -v "$ver"; then
+    ok "amneziawg module installed via DKMS ($ver)"
+  else
+    warn "DKMS failed; falling back to direct module install (won't survive kernel upgrades)"
+    make -C "$src" && make -C "$src" install && depmod -a \
+      || die "kernel module build failed (need matching linux-headers for $(uname -r))"
+  fi
   rm -rf "$tmp"
-  modprobe amneziawg || warn "module built but modprobe failed; a reboot may be required"
+  modprobe amneziawg || warn "module installed but modprobe failed; a reboot may be required"
 }
 
 install_awg_tools() {
