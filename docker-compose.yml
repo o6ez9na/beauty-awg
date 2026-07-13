@@ -62,6 +62,9 @@ services:
     network_mode: host
     environment:
       BACKEND_URL: http://localhost:8080
+      # Bind all interfaces. Docker otherwise sets HOSTNAME to the container name,
+      # which Debian resolves to 127.0.1.1, leaving Next reachable only on loopback.
+      HOSTNAME: 0.0.0.0
       PORT: "3000"
     depends_on:
       - backend
