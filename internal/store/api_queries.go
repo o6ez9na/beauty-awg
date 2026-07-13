@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"net/netip"
+	"time"
 
 	"beautifulwg/internal/awg"
 
@@ -13,11 +14,15 @@ import (
 // --- DTOs for the HTTP layer (carry DB ids the render models omit) ---
 
 type NodeDTO struct {
-	ID       uuid.UUID `json:"id"`
-	Name     string    `json:"name"`
-	Address  string    `json:"address"`
-	LANIface string    `json:"lan_iface"`
-	Subnets  []string  `json:"subnets"`
+	ID       uuid.UUID  `json:"id"`
+	Name     string     `json:"name"`
+	Address  string     `json:"address"`
+	LANIface string     `json:"lan_iface"`
+	Subnets  []string   `json:"subnets"`
+	Status   string     `json:"status"`
+	Hostname string     `json:"hostname"`
+	LastSeen *time.Time `json:"last_seen"`
+	IsHub    bool       `json:"is_hub"`
 }
 
 type ClientDTO struct {
@@ -31,11 +36,12 @@ type ClientDTO struct {
 
 func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT n.id, n.name, host(n.address), n.lan_iface,
-		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
+		SELECT n.id, n.name, COALESCE(host(n.address), ''), n.lan_iface,
+		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
+		       n.status, n.hostname, n.last_seen, n.is_hub
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
-		GROUP BY n.id ORDER BY n.address`)
+		GROUP BY n.id ORDER BY n.is_hub DESC, n.status, n.address NULLS FIRST, n.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +49,8 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	var out []NodeDTO
 	for rows.Next() {
 		var d NodeDTO
-		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets,
+			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -135,24 +142,30 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	c.Address, _ = netip.ParseAddr(addr)
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT host(n.address),
+		SELECT n.id, host(n.address),
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
 		FROM grants g
 		JOIN nodes n ON n.id = g.node_id
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
-		WHERE g.client_id = $1 GROUP BY n.id`, id)
+		WHERE g.client_id = $1 AND n.status = 'active' AND n.address IS NOT NULL
+		GROUP BY n.id`, id)
 	if err != nil {
 		return awg.Hub{}, awg.Client{}, nil, err
 	}
 	defer rows.Close()
+	rulesByGrant, err := s.loadAllGrantRules(ctx)
+	if err != nil {
+		return awg.Hub{}, awg.Client{}, nil, err
+	}
 	var grants []awg.Grant
 	for rows.Next() {
+		var nodeID uuid.UUID
 		var naddr string
 		var subnets []string
-		if err := rows.Scan(&naddr, &subnets); err != nil {
+		if err := rows.Scan(&nodeID, &naddr, &subnets); err != nil {
 			return awg.Hub{}, awg.Client{}, nil, err
 		}
-		g := awg.Grant{ClientAddr: c.Address}
+		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)]}
 		g.NodeAddr, _ = netip.ParseAddr(naddr)
 		for _, sn := range subnets {
 			if p, e := netip.ParsePrefix(sn); e == nil {

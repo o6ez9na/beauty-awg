@@ -28,6 +28,9 @@ func RenderHub(hub Hub, nodes []Node, clients []Client, grants []Grant) string {
 	b.WriteString(paramsBlock(hub.Params))
 
 	for _, n := range nodes {
+		if n.IsHub {
+			continue // the hub is the interface itself, not a peer
+		}
 		allowed := []string{n.Address.String() + "/32"}
 		for _, s := range n.Subnets {
 			allowed = append(allowed, s.String())
@@ -52,15 +55,24 @@ func RenderHub(hub Hub, nodes []Node, clients []Client, grants []Grant) string {
 	return b.String()
 }
 
+// NodePrivatePlaceholder is emitted in place of PrivateKey when the panel does
+// not hold the node's private key (reverse-enrolled nodes keep it locally). The
+// node agent substitutes its own private key before writing the config.
+const NodePrivatePlaceholder = "__REPLACE_WITH_NODE_PRIVATE_KEY__"
+
 // RenderNode builds the static awg config installed once on a home server.
 // It NATs (masquerades) the client pool into the LAN so LAN hosts need no route
 // back. AllowedIPs for the hub peer = whole pool, so all client traffic returns.
 func RenderNode(hub Hub, n Node) string {
 	var b strings.Builder
 
+	priv := n.Keys.Private
+	if priv == "" {
+		priv = NodePrivatePlaceholder
+	}
 	fmt.Fprintf(&b, "[Interface]\n")
 	fmt.Fprintf(&b, "Address = %s/32\n", n.Address.String())
-	fmt.Fprintf(&b, "PrivateKey = %s\n", n.Keys.Private)
+	fmt.Fprintf(&b, "PrivateKey = %s\n", priv)
 	b.WriteString(paramsBlock(hub.Params))
 	// Forward + masquerade pool -> LAN. awg-quick runs PostUp/PostDown.
 	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.ip_forward=1\n")
@@ -98,11 +110,12 @@ func RenderClient(hub Hub, c Client, granted []Grant) string {
 	}
 	b.WriteString(paramsBlock(hub.Params))
 
-	// Collect granted subnets. Always include hub tunnel IP for DNS/reachability.
+	// Collect granted dests (rule dests if any, else full subnets). Always
+	// include the hub tunnel IP for DNS/reachability.
 	allowed := []string{hub.Address.String() + "/32"}
 	for _, g := range granted {
-		for _, s := range g.Subnets {
-			allowed = append(allowed, s.String())
+		for _, d := range g.dests() {
+			allowed = append(allowed, d.String())
 		}
 	}
 

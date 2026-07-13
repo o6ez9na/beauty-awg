@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"beautifulwg/internal/awg"
+	"beautifulwg/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -215,6 +216,43 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.St.DeleteGrant(r.Context(), cid, nid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.Svc.Reconcile(r.Context()); err != nil {
+		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- grant rules (access levels) ---
+
+func (s *Server) handleGetGrantRules(w http.ResponseWriter, r *http.Request) {
+	cid, ok := pathUUID(w, r, "id")
+	nid, ok2 := pathUUID(w, r, "nodeId")
+	if !ok || !ok2 {
+		return
+	}
+	rules, err := s.St.GrantRules(r.Context(), cid, nid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rules)
+}
+
+func (s *Server) handleSetGrantRules(w http.ResponseWriter, r *http.Request) {
+	cid, ok := pathUUID(w, r, "id")
+	nid, ok2 := pathUUID(w, r, "nodeId")
+	if !ok || !ok2 {
+		return
+	}
+	var rules []store.RuleDTO
+	if !decodeJSON(w, r, &rules) {
+		return
+	}
+	if err := s.St.SetGrantRules(r.Context(), cid, nid, rules); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := s.Svc.Reconcile(r.Context()); err != nil {

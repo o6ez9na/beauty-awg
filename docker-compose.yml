@@ -42,7 +42,11 @@ services:
       HUB_LISTEN_PORT: "51820"
       HUB_POOL_CIDR: ${HUB_POOL_CIDR:-10.8.0.0/24}
       HUB_ADDRESS: ${HUB_ADDRESS:-10.8.0.1}
+      # Host's internet-facing interface, for full-tunnel exit masquerade.
+      HUB_WAN_IFACE: ${HUB_WAN_IFACE:-eth0}
       HUB_DNS: ${HUB_DNS:-}
+      # Shared secret nodes present to self-enroll. Empty = enrollment disabled.
+      HUB_ENROLL_SECRET: ${HUB_ENROLL_SECRET:-}
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
       # Cookies are sent over plain HTTP unless you terminate TLS in front.

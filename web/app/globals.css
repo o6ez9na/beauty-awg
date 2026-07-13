@@ -229,3 +229,39 @@ button.danger:hover {
 .toggle.on {
   color: var(--ok);
 }
+
+/* React Flow custom nodes */
+.gnode {
+  width: 170px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.gnode-client {
+  border-color: var(--accent);
+}
+
+.gnode-server {
+  border-color: var(--ok);
+}
+
+.gnode-hub {
+  border-color: #a371f7;
+  background: rgba(163, 113, 247, 0.1);
+}
+
+.gnode-title {
+  font-weight: 700;
+}
+
+.gnode-sub {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  margin-top: 3px;
+  word-break: break-all;
+}

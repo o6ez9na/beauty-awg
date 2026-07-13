@@ -35,7 +35,8 @@ func AllocateIP(ctx context.Context, tx pgx.Tx) (netip.Addr, error) {
 
 	used := map[netip.Addr]bool{hubAddr: true}
 	rows, err := tx.Query(ctx,
-		`SELECT host(address) FROM nodes UNION ALL SELECT host(address) FROM clients`)
+		`SELECT host(address) FROM nodes WHERE address IS NOT NULL
+		 UNION ALL SELECT host(address) FROM clients`)
 	if err != nil {
 		return netip.Addr{}, err
 	}

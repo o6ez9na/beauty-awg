@@ -7,6 +7,10 @@ export interface Node {
   address: string;
   lan_iface: string;
   subnets: string[];
+  status: "pending" | "active" | "rejected";
+  hostname: string;
+  last_seen: string | null;
+  is_hub: boolean;
 }
 
 export interface Client {
@@ -16,6 +20,13 @@ export interface Client {
   dns: string;
   enabled: boolean;
   granted_nodes: string[];
+}
+
+export interface Rule {
+  dest: string; // CIDR or host/32
+  proto: "any" | "tcp" | "udp";
+  port_from: number; // 0 = all ports
+  port_to: number; // 0 = single (=port_from) or all
 }
 
 export class ApiError extends Error {
@@ -51,6 +62,8 @@ export const api = {
   createNode: (name: string, lan_iface: string, subnets: string[]) =>
     req<{ id: string; address: string }>("POST", "/api/nodes", { name, lan_iface, subnets }),
   deleteNode: (id: string) => req<void>("DELETE", `/api/nodes/${id}`),
+  approveNode: (id: string) => req<void>("POST", `/api/nodes/${id}/approve`),
+  rejectNode: (id: string) => req<void>("POST", `/api/nodes/${id}/reject`),
 
   listClients: () => req<Client[]>("GET", "/api/clients"),
   createClient: (name: string, dns: string) =>
@@ -63,6 +76,11 @@ export const api = {
     req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}`),
   revoke: (clientId: string, nodeId: string) =>
     req<void>("DELETE", `/api/clients/${clientId}/grants/${nodeId}`),
+
+  getGrantRules: (clientId: string, nodeId: string) =>
+    req<Rule[]>("GET", `/api/clients/${clientId}/grants/${nodeId}/rules`),
+  setGrantRules: (clientId: string, nodeId: string, rules: Rule[]) =>
+    req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}/rules`, rules),
 
   // config endpoints return text/plain; consumed directly as URLs for download.
   clientConfigUrl: (id: string) => `/api/clients/${id}/config`,

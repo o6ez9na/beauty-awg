@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { api, ApiError, Node, Client } from "./lib/api";
 import ConfigModal from "./components/ConfigModal";
 
@@ -46,12 +47,17 @@ export default function Dashboard() {
         <div className="brand">
           beautiful<span style={{ color: "var(--accent)" }}>wg</span>
         </div>
-        <button
-          className="ghost"
-          onClick={() => api.logout().then(() => router.push("/login"))}
-        >
-          Logout
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Link href="/graph">
+            <button className="ghost">Access graph</button>
+          </Link>
+          <button
+            className="ghost"
+            onClick={() => api.logout().then(() => router.push("/login"))}
+          >
+            Logout
+          </button>
+        </div>
       </header>
 
       <div className="container">
@@ -105,9 +111,46 @@ function NodesCard({
     });
   }
 
+  const pending = nodes.filter((n) => n.status === "pending");
+  const active = nodes.filter((n) => n.status === "active");
+
   return (
     <div className="card">
       <h2>Nodes (home servers)</h2>
+
+      {pending.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ color: "var(--accent)", fontWeight: 600, marginBottom: 8 }}>
+            ● {pending.length} node{pending.length > 1 ? "s" : ""} waiting for approval
+          </div>
+          {pending.map((n) => (
+            <div
+              key={n.id}
+              className="row"
+              style={{
+                border: "1px solid var(--accent)",
+                borderRadius: 8,
+                padding: "10px 12px",
+                marginBottom: 8,
+                background: "rgba(47,129,247,0.08)",
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <b>{n.name}</b>{" "}
+                <span className="mono">({n.hostname})</span>
+                <div className="mono" style={{ marginTop: 4 }}>
+                  wants: {n.subnets.join(", ")} · iface {n.lan_iface}
+                </div>
+              </div>
+              <button onClick={() => onChange(() => api.approveNode(n.id))}>Approve</button>
+              <button className="danger" onClick={() => onChange(() => api.rejectNode(n.id))}>
+                Reject
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <table>
         <thead>
           <tr>
@@ -115,39 +158,49 @@ function NodesCard({
             <th>Tunnel IP</th>
             <th>LAN subnets</th>
             <th>LAN iface</th>
+            <th>Last seen</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {nodes.map((n) => (
+          {active.map((n) => (
             <tr key={n.id}>
               <td>{n.name}</td>
               <td className="mono">{n.address}</td>
               <td className="mono">{n.subnets.join(", ")}</td>
               <td className="mono">{n.lan_iface}</td>
+              <td className="mono">
+                {n.is_hub ? "—" : n.last_seen ? new Date(n.last_seen).toLocaleString() : "—"}
+              </td>
               <td className="actions">
-                <button
-                  className="ghost"
-                  onClick={() =>
-                    onConfig({
-                      title: `Node: ${n.name}`,
-                      url: api.nodeConfigUrl(n.id),
-                      filename: `${n.name}.conf`,
-                    })
-                  }
-                >
-                  Config
-                </button>
-                <button className="danger" onClick={() => onChange(() => api.deleteNode(n.id))}>
-                  Delete
-                </button>
+                {n.is_hub ? (
+                  <span className="mono">virtual (internet exit)</span>
+                ) : (
+                  <>
+                    <button
+                      className="ghost"
+                      onClick={() =>
+                        onConfig({
+                          title: `Node: ${n.name}`,
+                          url: api.nodeConfigUrl(n.id),
+                          filename: `${n.name}.conf`,
+                        })
+                      }
+                    >
+                      Config
+                    </button>
+                    <button className="danger" onClick={() => onChange(() => api.deleteNode(n.id))}>
+                      Delete
+                    </button>
+                  </>
+                )}
               </td>
             </tr>
           ))}
-          {nodes.length === 0 && (
+          {active.length === 0 && (
             <tr>
-              <td colSpan={5} className="mono">
-                no nodes yet
+              <td colSpan={6} className="mono">
+                no active nodes yet
               </td>
             </tr>
           )}
@@ -238,19 +291,23 @@ function ClientsCard({
               </td>
               <td className="mono">{c.dns || "(hub default)"}</td>
               <td>
-                {nodes.map((n) => {
-                  const on = c.granted_nodes.includes(n.id);
-                  return (
-                    <span
-                      key={n.id}
-                      className={"chip" + (on ? " on" : "")}
-                      onClick={() => toggleGrant(c, n.id)}
-                    >
-                      {on ? "✓" : "＋"} {n.name}
-                    </span>
-                  );
-                })}
-                {nodes.length === 0 && <span className="mono">add a node first</span>}
+                {nodes
+                  .filter((n) => n.status === "active")
+                  .map((n) => {
+                    const on = c.granted_nodes.includes(n.id);
+                    return (
+                      <span
+                        key={n.id}
+                        className={"chip" + (on ? " on" : "")}
+                        onClick={() => toggleGrant(c, n.id)}
+                      >
+                        {on ? "✓" : "＋"} {n.name}
+                      </span>
+                    );
+                  })}
+                {nodes.filter((n) => n.status === "active").length === 0 && (
+                  <span className="mono">add a node first</span>
+                )}
               </td>
               <td className="actions">
                 <button

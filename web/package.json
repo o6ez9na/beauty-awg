@@ -12,7 +12,8 @@
     "next": "15.1.6",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "qrcode.react": "4.2.0"
+    "qrcode.react": "4.2.0",
+    "@xyflow/react": "12.3.6"
   },
   "devDependencies": {
     "@types/node": "22.10.7",

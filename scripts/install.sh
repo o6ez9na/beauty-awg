@@ -157,19 +157,26 @@ install_panel() {
     ask_secret "Admin password for the panel" admin_pw
     [ -n "$admin_pw" ] || die "admin password required"
     secret="$(openssl rand -hex 32)"
+    local enroll_secret; enroll_secret="$(openssl rand -hex 24)"
+    local wan; wan="$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'dev \K\S+' | head -1)"
+    wan="${wan:-eth0}"
+    info "detected WAN interface: $wan"
     cat > .env <<EOF
 DB_PASSWORD=$(openssl rand -hex 16)
 SESSION_SECRET=$secret
 HUB_ENDPOINT=$endpoint
 HUB_POOL_CIDR=10.8.0.0/24
 HUB_ADDRESS=10.8.0.1
+HUB_WAN_IFACE=$wan
 HUB_DNS=$dns
+HUB_ENROLL_SECRET=$enroll_secret
 ADMIN_USER=admin
 ADMIN_PASSWORD=$admin_pw
 INSECURE_COOKIES=1
 EOF
     chmod 600 .env
     ok "wrote $INSTALL_DIR/.env"
+    ok "ENROLLMENT SECRET (give this to each node): $enroll_secret"
   else
     warn ".env already exists; leaving it untouched"
   fi
@@ -181,31 +188,29 @@ EOF
 }
 
 # --- node install ----------------------------------------------------------
+# The node self-enrolls: it announces itself to the panel and waits for the admin
+# to approve, then pulls + applies its config automatically (config push over
+# CGNAT via polling). No config is pasted by hand.
 install_node() {
   install_awg_module
   install_awg_tools
   enable_forwarding
   mkdir -p "$AWG_CONF_DIR"
 
-  local conf="$AWG_CONF_DIR/$AWG_IFACE.conf"
-  if [ -f "$conf" ]; then
-    warn "$conf already exists; leaving it untouched"
-  else
-    echo "Paste the node config downloaded from the panel (Nodes -> Config)." >/dev/tty
-    echo "Finish with Ctrl-D on an empty line:" >/dev/tty
-    umask 077
-    cat >"$conf" <"$TTY"
-    [ -s "$conf" ] || die "empty config; aborting"
-    ok "wrote $conf"
-  fi
+  local panel secret subnets iface webpw
+  ask "Panel URL (e.g. http://1.2.3.4:3000)" panel
+  [ -n "$panel" ] || die "panel URL required"
+  ask_secret "Enrollment secret (HUB_ENROLL_SECRET on the panel)" secret
+  [ -n "$secret" ] || die "enroll secret required"
+  ask "LAN subnets to expose (comma-separated)" subnets
+  [ -n "$subnets" ] || die "at least one subnet required"
+  ask "LAN interface (for masquerade)" iface "eth0"
+  ask_secret "Password for the node web editor (blank = disable web UI)" webpw
 
-  info "enabling awg-quick@$AWG_IFACE service"
-  systemctl enable "awg-quick@$AWG_IFACE"
-  systemctl restart "awg-quick@$AWG_IFACE"
-  ok "node up. tunnel to hub should establish within ~25s"
-  awg show "$AWG_IFACE" 2>/dev/null || true
+  install_nodeagent "$panel" "$secret" "$subnets" "$iface" "$webpw"
 
-  install_nodeagent
+  ok "node enrolled. Approve it in the panel (Nodes -> pending)."
+  info "watch progress: journalctl -u awg-nodeagent -f"
 }
 
 # Optional local web UI on the node to view/edit awg config from a LAN browser.
@@ -223,9 +228,11 @@ install_go() {
   export PATH="/usr/local/go/bin:$PATH"
 }
 
+# install_nodeagent <panel_url> <enroll_secret> <subnets> <lan_iface> <web_password>
+# Builds + installs the agent as a systemd service. It self-enrolls with the panel
+# and applies pushed config. The web editor is enabled only if a password is set.
 install_nodeagent() {
-  local want; ask "Install the node web UI to edit the config in a browser? (y/n)" want y
-  case "$want" in y|Y|yes|"") ;; *) return ;; esac
+  local panel="$1" secret="$2" subnets="$3" iface="$4" webpw="$5"
 
   install_go
   case "$PKG" in apt) pkg_install git ;; dnf) pkg_install git ;; esac
@@ -239,27 +246,30 @@ install_nodeagent() {
     || ( cd "$INSTALL_DIR" && go build -o /usr/local/bin/awg-nodeagent ./cmd/nodeagent ) \
     || die "node agent build failed"
 
-  local pw addr
-  ask_secret "Set a password for the node web UI (user: admin)" pw
-  [ -n "$pw" ] || die "password required"
-  ask "Web UI listen address" addr ":8088"
-
   umask 077
   cat >/etc/awg-nodeagent.env <<EOF
-NODE_PASSWORD=$pw
-NODE_LISTEN=$addr
+PANEL_URL=$panel
+ENROLL_SECRET=$secret
+SUBNETS=$subnets
+LAN_IFACE=$iface
+NODE_NAME=$(hostname)
+STATE_FILE=/var/lib/awg-nodeagent/state.json
 AWG_IFACE=$AWG_IFACE
 AWG_CONF=$AWG_CONF_DIR/$AWG_IFACE.conf
+NODE_PASSWORD=$webpw
+NODE_LISTEN=:8088
 EOF
   cat >/etc/systemd/system/awg-nodeagent.service <<'EOF'
 [Unit]
-Description=beautifulwg node web UI
+Description=beautifulwg node agent (enroll + config push + web editor)
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/awg-nodeagent.env
 ExecStart=/usr/local/bin/awg-nodeagent
 Restart=on-failure
+RestartSec=5
 User=root
 
 [Install]
@@ -267,8 +277,9 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable --now awg-nodeagent
-  ok "node web UI: http://<node-lan-ip>${addr}  (user: admin)"
-  warn "it edits the awg config + runs awg-quick as root — keep it on the LAN only"
+  ok "node agent running (systemd: awg-nodeagent)"
+  [ -n "$webpw" ] && ok "node web editor: http://<node-lan-ip>:8088 (user: admin)"
+  [ -n "$webpw" ] && warn "web editor runs awg-quick as root — keep it LAN-only"
 }
 
 case "$MODE" in

@@ -36,6 +36,15 @@ func main() {
 	if err := ensureHub(ctx, st); err != nil {
 		log.Fatalf("ensure hub: %v", err)
 	}
+	if err := st.SetEnrollSecretIfEmpty(ctx, os.Getenv("HUB_ENROLL_SECRET")); err != nil {
+		log.Fatalf("set enroll secret: %v", err)
+	}
+	if err := st.SetWanIface(ctx, os.Getenv("HUB_WAN_IFACE")); err != nil {
+		log.Fatalf("set wan iface: %v", err)
+	}
+	if err := st.EnsureHubNode(ctx); err != nil {
+		log.Fatalf("ensure hub node: %v", err)
+	}
 
 	applier := awg.Applier{
 		Iface:   cfg.AWGIface,

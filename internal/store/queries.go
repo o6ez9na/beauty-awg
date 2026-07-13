@@ -17,11 +17,11 @@ func (s *Store) GetHub(ctx context.Context) (awg.Hub, error) {
 	var h1, h2, h3, h4 int64
 	err := s.Pool.QueryRow(ctx, `
 		SELECT endpoint, listen_port, host(address), pool_cidr::text,
-		       private_key, public_key, dns,
+		       private_key, public_key, dns, wan_iface,
 		       jc, jmin, jmax, s1, s2, h1, h2, h3, h4
 		FROM hub WHERE id = 1`,
 	).Scan(&h.Endpoint, &h.ListenPort, &addr, &pool,
-		&h.Keys.Private, &h.Keys.Public, &h.DNS,
+		&h.Keys.Private, &h.Keys.Public, &h.DNS, &h.WANIface,
 		&h.Params.Jc, &h.Params.Jmin, &h.Params.Jmax, &h.Params.S1, &h.Params.S2,
 		&h1, &h2, &h3, &h4)
 	if err != nil {
@@ -107,10 +107,11 @@ type nodeRow struct {
 func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, n.name, host(n.address), n.lan_iface,
-		       n.private_key, n.public_key, n.preshared,
+		       n.private_key, n.public_key, n.preshared, n.is_hub,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
+		WHERE n.status = 'active' AND n.address IS NOT NULL
 		GROUP BY n.id
 		ORDER BY n.address`)
 	if err != nil {
@@ -124,7 +125,7 @@ func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 		var addr string
 		var subnets []string
 		if err := rows.Scan(&nr.ID, &nr.Node.Name, &addr, &nr.Node.LANIface,
-			&nr.Node.Keys.Private, &nr.Node.Keys.Public, &nr.Node.Preshared, &subnets); err != nil {
+			&nr.Node.Keys.Private, &nr.Node.Keys.Public, &nr.Node.Preshared, &nr.Node.IsHub, &subnets); err != nil {
 			return nil, err
 		}
 		nr.Node.Address, _ = netip.ParseAddr(addr)
@@ -182,6 +183,11 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 		return awg.Hub{}, nil, nil, nil, err
 	}
 
+	rulesByGrant, err := s.loadAllGrantRules(ctx)
+	if err != nil {
+		return awg.Hub{}, nil, nil, nil, err
+	}
+
 	// grants for enabled clients only
 	grows, err := s.Pool.Query(ctx, `
 		SELECT g.client_id, g.node_id
@@ -206,6 +212,8 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 			ClientAddr: caddr,
 			NodeAddr:   node.Address,
 			Subnets:    node.Subnets,
+			Rules:      rulesByGrant[grantKey(cid, nid)],
+			IsExit:     node.IsHub,
 		})
 	}
 	return hub, nodes, clients, grants, grows.Err()
