@@ -185,3 +185,143 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ARTIFACT }}
+
+  # ---- client: build the userspace backend (amneziawg-go) for headerless hosts ----
+  # Fallback the installer pulls when the kernel module can't be built (WSL2 etc).
+  awg-go:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      # AmneziaWG userspace impl ref to build from (bump to pin a release).
+      AWG_GO_REF: master
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Checkout amneziawg-go
+        uses: actions/checkout@v4
+        with:
+          repository: amnezia-vpn/amneziawg-go
+          ref: ${{ env.AWG_GO_REF }}
+          path: awg-go
+
+      - name: Build amneziawg-go
+        working-directory: awg-go
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          version="${{ github.event_name == 'release' && github.ref_name || inputs.version }}"
+          out="amneziawg-go-${version}-linux-${GOARCH}"
+          go build -trimpath -ldflags "-s -w" -o "../$out" .
+          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+          # MIT requires the license notice ship with redistributed copies.
+          cp LICENSE "../amneziawg-go-LICENSE"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amneziawg-go-linux-${{ matrix.goarch }}
+          path: |
+            ${{ env.ARTIFACT }}
+            amneziawg-go-LICENSE
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ARTIFACT }}
+            amneziawg-go-LICENSE
+
+  # ---- client: build the control-plane tools (awg, awg-quick) for the node ----
+  # GPL-2.0, so the license text and the complete corresponding source are
+  # bundled with the binaries (in each tarball) and attached to the release.
+  # Built natively per-arch (awg is a C binary; awg-quick is an arch-independent
+  # bash script) to avoid cross-compiling libmnl.
+  awg-tools:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      # amneziawg-tools ref to build from (bump to pin a release).
+      AWG_TOOLS_REF: master
+    steps:
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git build-essential libmnl-dev
+
+      - name: Checkout amneziawg-tools
+        uses: actions/checkout@v4
+        with:
+          repository: amnezia-vpn/amneziawg-tools
+          ref: ${{ env.AWG_TOOLS_REF }}
+          path: awg-tools
+
+      - name: Build and package
+        run: |
+          version="${{ github.event_name == 'release' && github.ref_name || inputs.version }}"
+          arch="${{ matrix.arch }}"
+          make -C awg-tools/src -j"$(nproc)"
+          make -C awg-tools/src install DESTDIR="$PWD/stage" PREFIX=/usr
+
+          mkdir -p dist
+          cp stage/usr/bin/awg stage/usr/bin/awg-quick dist/
+          cp awg-tools/COPYING dist/COPYING
+          cat > dist/README.source <<EOF
+          awg and awg-quick are built from amneziawg-tools, licensed under the
+          GNU General Public License, version 2 (see COPYING).
+
+          The complete corresponding source for this exact build is available
+          from the same GitHub release:
+            amneziawg-tools-${version}-source.tar.gz
+          and upstream:
+            https://github.com/amnezia-vpn/amneziawg-tools
+
+          Written offer: for three years from the date you received these
+          binaries you may obtain the corresponding source by either means
+          above at no charge.
+          EOF
+
+          out="amneziawg-tools-${version}-linux-${arch}.tar.gz"
+          tar -czf "$out" -C dist .
+          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+
+          # Corresponding source (GPL-2 section 3), attached once from amd64.
+          src="amneziawg-tools-${version}-source.tar.gz"
+          tar -czf "$src" -C awg-tools .
+          echo "SRC_ARTIFACT=$src" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amneziawg-tools-linux-${{ matrix.arch }}
+          path: |
+            ${{ env.ARTIFACT }}
+            ${{ env.SRC_ARTIFACT }}
+
+      - name: Attach binaries to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
+
+      - name: Attach corresponding source to release
+        if: github.event_name == 'release' && matrix.arch == 'amd64'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.SRC_ARTIFACT }}

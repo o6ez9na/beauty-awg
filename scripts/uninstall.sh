@@ -79,6 +79,9 @@ remove_awg_module() {
   local ver; ver="$(dkms status 2>/dev/null | sed -n 's/^amneziawg\/\([^,]*\).*/\1/p' | head -1)"
   [ -n "$ver" ] && dkms remove "amneziawg/$ver" --all 2>/dev/null || true
   rm -rf /usr/src/amneziawg-* 2>/dev/null || true
+  # userspace backend (installed as a fallback when the module can't be built)
+  rm -f /usr/bin/amneziawg-go
+  rm -rf /usr/share/doc/amneziawg-go
 }
 
 remove_sysctl() {
