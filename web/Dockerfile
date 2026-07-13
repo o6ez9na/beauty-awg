@@ -9,6 +9,10 @@ RUN npm ci
 # ---- build ----
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+# next rewrites destinations are baked at BUILD time (routes-manifest.json), so
+# the backend URL must be present here, not just at runtime.
+ARG BACKEND_URL=http://localhost:8080
+ENV BACKEND_URL=$BACKEND_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

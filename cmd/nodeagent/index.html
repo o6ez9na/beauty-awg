@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>beautifulwg node</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#2a3140;--text:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--ok:#3fb950;--danger:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px}
+  .wrap{max-width:900px;margin:0 auto;padding:24px 16px 64px}
+  h1{font-size:18px;font-weight:700;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:18px}
+  .card h2{margin:0 0 12px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  textarea{width:100%;min-height:340px;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  button{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:9px 16px;cursor:pointer;font-weight:600}
+  button.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+  button:disabled{opacity:.5;cursor:default}
+  pre{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:0}
+  .msg{margin-left:auto;font-size:13px}
+  .msg.ok{color:var(--ok)}
+  .msg.err{color:var(--danger)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>beautiful<span>wg</span> · node</h1>
+
+  <div class="card">
+    <h2>awg config</h2>
+    <textarea id="conf" spellcheck="false" placeholder="loading…"></textarea>
+    <div class="row">
+      <button id="save">Save &amp; apply</button>
+      <button class="ghost" id="reload">Reload from disk</button>
+      <button class="ghost" id="refresh">Refresh status</button>
+      <span id="msg" class="msg"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>status (awg show)</h2>
+    <pre id="status">…</pre>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function setMsg(t, ok){ const m=$("msg"); m.textContent=t; m.className="msg "+(ok?"ok":"err"); }
+
+async function loadConfig(){
+  const r = await fetch("/api/config");
+  if(!r.ok){ setMsg("load failed: "+r.status, false); return; }
+  $("conf").value = await r.text();
+  setMsg("loaded", true);
+}
+async function loadStatus(){
+  const r = await fetch("/api/status");
+  $("status").textContent = await r.text();
+}
+async function save(){
+  $("save").disabled = true;
+  setMsg("applying…", true);
+  const r = await fetch("/api/config", { method:"POST", headers:{"Content-Type":"text/plain"}, body:$("conf").value });
+  const out = await r.text();
+  if(r.ok){ setMsg("applied", true); } else { setMsg("error", false); }
+  $("status").textContent = out;
+  $("save").disabled = false;
+  loadStatus();
+}
+
+$("save").onclick = save;
+$("reload").onclick = loadConfig;
+$("refresh").onclick = loadStatus;
+loadConfig();
+loadStatus();
+setInterval(loadStatus, 15000);
+</script>
+</body>
+</html>

@@ -38,7 +38,10 @@ curl -fsSL .../install.sh | sudo bash -s -- panel   # or: node
   `/opt/beautifulwg`, generates `.env` (prompts for endpoint + admin password),
   enables IP forwarding, and runs `docker compose up -d --build`.
 - **node** installs AmneziaWG, enables forwarding, asks you to paste the node
-  `.conf` downloaded from the panel, and enables `awg-quick@awg0` at boot.
+  `.conf` downloaded from the panel, and enables `awg-quick@awg0` at boot. It then
+  optionally installs a **node web UI** (`awg-nodeagent`, systemd) to view/edit
+  the node's awg config from a browser on the LAN (`http://<node-lan-ip>:8088`,
+  user `admin`). Keep it LAN-only — it edits the config and runs `awg-quick` as root.
 
 Replace `YOURUSER` with your GitHub repo (or set `REPO_URL=` env before running).
 

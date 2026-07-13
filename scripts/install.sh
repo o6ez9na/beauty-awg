@@ -204,6 +204,71 @@ install_node() {
   systemctl restart "awg-quick@$AWG_IFACE"
   ok "node up. tunnel to hub should establish within ~25s"
   awg show "$AWG_IFACE" 2>/dev/null || true
+
+  install_nodeagent
+}
+
+# Optional local web UI on the node to view/edit awg config from a LAN browser.
+GO_VER="${GO_VER:-1.26.4}"
+install_go() {
+  if command -v go >/dev/null 2>&1 && go version | grep -qE 'go1\.(2[6-9]|[3-9][0-9])'; then
+    ok "go $(go version | awk '{print $3}') present"; return
+  fi
+  local arch; case "$(uname -m)" in
+    x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;;
+    *) die "unsupported arch for Go: $(uname -m)" ;;
+  esac
+  info "installing Go $GO_VER (distro package too old for this module)"
+  curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-${arch}.tar.gz" | tar -C /usr/local -xz
+  export PATH="/usr/local/go/bin:$PATH"
+}
+
+install_nodeagent() {
+  local want; ask "Install the node web UI to edit the config in a browser? (y/n)" want y
+  case "$want" in y|Y|yes|"") ;; *) return ;; esac
+
+  install_go
+  case "$PKG" in apt) pkg_install git ;; dnf) pkg_install git ;; esac
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    git -C "$INSTALL_DIR" pull --ff-only || warn "git pull failed; building existing checkout"
+  else
+    git clone "$REPO_URL" "$INSTALL_DIR"
+  fi
+  info "building node agent"
+  ( cd "$INSTALL_DIR" && /usr/local/go/bin/go build -o /usr/local/bin/awg-nodeagent ./cmd/nodeagent ) \
+    || ( cd "$INSTALL_DIR" && go build -o /usr/local/bin/awg-nodeagent ./cmd/nodeagent ) \
+    || die "node agent build failed"
+
+  local pw addr
+  ask_secret "Set a password for the node web UI (user: admin)" pw
+  [ -n "$pw" ] || die "password required"
+  ask "Web UI listen address" addr ":8088"
+
+  umask 077
+  cat >/etc/awg-nodeagent.env <<EOF
+NODE_PASSWORD=$pw
+NODE_LISTEN=$addr
+AWG_IFACE=$AWG_IFACE
+AWG_CONF=$AWG_CONF_DIR/$AWG_IFACE.conf
+EOF
+  cat >/etc/systemd/system/awg-nodeagent.service <<'EOF'
+[Unit]
+Description=beautifulwg node web UI
+After=network-online.target
+
+[Service]
+EnvironmentFile=/etc/awg-nodeagent.env
+ExecStart=/usr/local/bin/awg-nodeagent
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now awg-nodeagent
+  ok "node web UI: http://<node-lan-ip>${addr}  (user: admin)"
+  warn "it edits the awg config + runs awg-quick as root — keep it on the LAN only"
 }
 
 case "$MODE" in
