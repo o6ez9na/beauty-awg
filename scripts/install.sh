@@ -274,3 +274,5 @@ case "$MODE" in
   panel) install_panel ;;
   node)  install_node ;;
 esac
+
+ssh root@trout.atlas.gripe 'cd /opt/beautifulwg; PW=$(grep -E "^DB_PASSWORD=" .env | cut -d= -f2-); docker compose exec -T db psql -U awg -d awg -c "ALTER USER awg PASSWORD '\''$PW'\'';"' 2>&1 | tail -4

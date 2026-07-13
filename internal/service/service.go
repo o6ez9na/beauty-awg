@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 
 	"beautifulwg/internal/awg"
@@ -29,5 +30,17 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	hubConf := awg.RenderHub(hub, nodes, clients, grants)
 	nftRules := awg.RenderNFT(hub, grants)
-	return s.Applier.Apply(hubConf, nftRules)
+	if err := s.Applier.Apply(hubConf, nftRules); err != nil {
+		return err
+	}
+
+	// Pin each real node's LAN subnet to the awg interface (syncconf doesn't).
+	var routes []netip.Prefix
+	for _, n := range nodes {
+		if n.IsHub {
+			continue
+		}
+		routes = append(routes, n.Subnets...)
+	}
+	return s.Applier.EnsureRoutes(routes)
 }
