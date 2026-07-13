@@ -25,7 +25,7 @@ device's traffic into home LANs that sit behind CGNAT, via a VPS relay.
 One command on a fresh box; it asks whether to install the **panel** or a **node**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOURUSER/beautifulwg/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beautifulwg/main/scripts/install.sh | sudo bash
 ```
 
 Non-interactive:
