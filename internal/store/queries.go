@@ -107,7 +107,7 @@ type nodeRow struct {
 func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, n.name, host(n.address), n.lan_iface,
-		       n.private_key, n.public_key, n.preshared, n.is_hub,
+		       n.private_key, n.public_key, n.preshared, n.is_hub, n.dns,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
@@ -125,7 +125,7 @@ func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 		var addr string
 		var subnets []string
 		if err := rows.Scan(&nr.ID, &nr.Node.Name, &addr, &nr.Node.LANIface,
-			&nr.Node.Keys.Private, &nr.Node.Keys.Public, &nr.Node.Preshared, &nr.Node.IsHub, &subnets); err != nil {
+			&nr.Node.Keys.Private, &nr.Node.Keys.Public, &nr.Node.Preshared, &nr.Node.IsHub, &nr.Node.DNS, &subnets); err != nil {
 			return nil, err
 		}
 		nr.Node.Address, _ = netip.ParseAddr(addr)
@@ -214,6 +214,7 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 			Subnets:    node.Subnets,
 			Rules:      rulesByGrant[grantKey(cid, nid)],
 			IsExit:     node.IsHub,
+			NodeDNS:    node.DNS,
 		})
 	}
 	return hub, nodes, clients, grants, grows.Err()

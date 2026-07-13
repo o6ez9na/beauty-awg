@@ -45,6 +45,17 @@ curl -fsSL .../install.sh | sudo bash -s -- panel   # or: node
 
 Replace `YOURUSER` with your GitHub repo (or set `REPO_URL=` env before running).
 
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/uninstall.sh | sudo bash
+```
+
+Removes only beautifulwg's own bits and leaves shared things (Docker, the AmneziaWG
+kernel module) alone. Flags: `PURGE_DATA=1` also deletes the DB volume / repo / node
+keypair; `PURGE_AWG=1` also removes the kernel module (+ tools on a node); `FORCE=1`
+skips the confirmation.
+
 ## Host prerequisites (VPS hub)
 
 The `backend` container runs in the host network namespace with `NET_ADMIN` so it

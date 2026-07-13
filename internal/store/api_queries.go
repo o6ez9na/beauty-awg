@@ -23,6 +23,7 @@ type NodeDTO struct {
 	Hostname string     `json:"hostname"`
 	LastSeen *time.Time `json:"last_seen"`
 	IsHub    bool       `json:"is_hub"`
+	DNS      string     `json:"dns"`
 }
 
 type ClientDTO struct {
@@ -38,7 +39,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, n.name, COALESCE(host(n.address), ''), n.lan_iface,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
-		       n.status, n.hostname, n.last_seen, n.is_hub
+		       n.status, n.hostname, n.last_seen, n.is_hub, n.dns
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		GROUP BY n.id ORDER BY n.is_hub DESC, n.status, n.address NULLS FIRST, n.name`)
@@ -50,7 +51,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	for rows.Next() {
 		var d NodeDTO
 		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets,
-			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub); err != nil {
+			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -82,6 +83,12 @@ func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 
 func (s *Store) DeleteNode(ctx context.Context, id uuid.UUID) error {
 	_, err := s.Pool.Exec(ctx, `DELETE FROM nodes WHERE id = $1`, id)
+	return err
+}
+
+// SetNodeDNS sets a node's DNS server (empty string clears it).
+func (s *Store) SetNodeDNS(ctx context.Context, id uuid.UUID, dns string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE nodes SET dns = $2 WHERE id = $1`, id, dns)
 	return err
 }
 
@@ -142,7 +149,7 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	c.Address, _ = netip.ParseAddr(addr)
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT n.id, host(n.address),
+		SELECT n.id, host(n.address), n.dns,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
 		FROM grants g
 		JOIN nodes n ON n.id = g.node_id
@@ -160,12 +167,12 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	var grants []awg.Grant
 	for rows.Next() {
 		var nodeID uuid.UUID
-		var naddr string
+		var naddr, ndns string
 		var subnets []string
-		if err := rows.Scan(&nodeID, &naddr, &subnets); err != nil {
+		if err := rows.Scan(&nodeID, &naddr, &ndns, &subnets); err != nil {
 			return awg.Hub{}, awg.Client{}, nil, err
 		}
-		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)]}
+		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns}
 		g.NodeAddr, _ = netip.ParseAddr(naddr)
 		for _, sn := range subnets {
 			if p, e := netip.ParsePrefix(sn); e == nil {

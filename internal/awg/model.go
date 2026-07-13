@@ -24,6 +24,7 @@ type Node struct {
 	LANIface  string // interface facing the LAN, for masquerade (e.g. "eth0")
 	Preshared string // optional PSK shared with hub
 	IsHub     bool   // virtual node representing the hub itself (internet exit)
+	DNS       string // DNS server behind this node; forces granted clients' :53 here
 }
 
 // Client is a VPN user (laptop/phone). Gets a /32 tunnel IP.
@@ -42,6 +43,7 @@ type Grant struct {
 	Subnets    []netip.Prefix // the node's full subnets
 	Rules      []GrantRule    // access level; empty = full access to Subnets
 	IsExit     bool           // grant to the hub node => internet full-tunnel
+	NodeDNS    string         // node's DNS server; if set, DNAT this client's :53 here
 }
 
 // GrantRule restricts access to a destination + optional proto/port range.
