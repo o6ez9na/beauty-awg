@@ -2,6 +2,7 @@ package awg
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,4 +79,28 @@ func (a Applier) Apply(hubConf, nftRules string) error {
 // ifaceExists reports whether the awg interface is present in the netns.
 func (a Applier) ifaceExists() bool {
 	return exec.Command("ip", "link", "show", a.Iface).Run() == nil
+}
+
+// EnsureRoutes installs a route to the awg interface for each node LAN subnet.
+// `awg syncconf` updates peers but (unlike `awg-quick up`) does NOT touch the
+// routing table, so subnets belonging to nodes added after the interface first
+// came up would otherwise be routed out the default gateway. `ip route replace`
+// is idempotent. Skip 0.0.0.0/0 (the hub-exit node) — that must not be pinned to
+// awg0. Call after Apply.
+func (a Applier) EnsureRoutes(subnets []netip.Prefix) error {
+	if a.DryRun {
+		for _, s := range subnets {
+			fmt.Printf("ip route replace %s dev %s\n", s.String(), a.Iface)
+		}
+		return nil
+	}
+	for _, s := range subnets {
+		if s.Bits() == 0 {
+			continue // never pin a default route to the tunnel here
+		}
+		if out, err := exec.Command("ip", "route", "replace", s.String(), "dev", a.Iface).CombinedOutput(); err != nil {
+			return fmt.Errorf("ip route replace %s: %w: %s", s, err, out)
+		}
+	}
+	return nil
 }
