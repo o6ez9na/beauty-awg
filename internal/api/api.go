@@ -30,6 +30,7 @@ func (s *Server) Routes() http.Handler {
 	// nodes
 	mux.HandleFunc("GET /api/nodes", s.requireAuth(s.handleListNodes))
 	mux.HandleFunc("POST /api/nodes", s.requireAuth(s.handleCreateNode))
+	mux.HandleFunc("PATCH /api/nodes/{id}", s.requireAuth(s.handleUpdateNode))
 	mux.HandleFunc("DELETE /api/nodes/{id}", s.requireAuth(s.handleDeleteNode))
 	mux.HandleFunc("GET /api/nodes/{id}/config", s.requireAuth(s.handleNodeConfig))
 	mux.HandleFunc("POST /api/nodes/{id}/approve", s.requireAuth(s.handleApproveNode))

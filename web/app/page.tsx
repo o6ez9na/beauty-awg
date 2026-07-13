@@ -158,6 +158,7 @@ function NodesCard({
             <th>Tunnel IP</th>
             <th>LAN subnets</th>
             <th>LAN iface</th>
+            <th>DNS</th>
             <th>Last seen</th>
             <th></th>
           </tr>
@@ -169,6 +170,21 @@ function NodesCard({
               <td className="mono">{n.address}</td>
               <td className="mono">{n.subnets.join(", ")}</td>
               <td className="mono">{n.lan_iface}</td>
+              <td>
+                {n.is_hub ? (
+                  <span className="mono">—</span>
+                ) : (
+                  <input
+                    type="text"
+                    defaultValue={n.dns}
+                    placeholder="192.168.1.1"
+                    style={{ width: 120 }}
+                    onBlur={(e) => {
+                      if (e.target.value !== n.dns) onChange(() => api.updateNode(n.id, e.target.value));
+                    }}
+                  />
+                )}
+              </td>
               <td className="mono">
                 {n.is_hub ? "—" : n.last_seen ? new Date(n.last_seen).toLocaleString() : "—"}
               </td>
@@ -199,7 +215,7 @@ function NodesCard({
           ))}
           {active.length === 0 && (
             <tr>
-              <td colSpan={6} className="mono">
+              <td colSpan={7} className="mono">
                 no active nodes yet
               </td>
             </tr>

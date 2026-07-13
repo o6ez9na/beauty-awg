@@ -63,6 +63,30 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id.String(), "address": addr.String()})
 }
 
+type updateNodeReq struct {
+	DNS string `json:"dns"`
+}
+
+func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req updateNodeReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := s.St.SetNodeDNS(r.Context(), id, req.DNS); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.Svc.Reconcile(r.Context()); err != nil {
+		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(w, r, "id")
 	if !ok {

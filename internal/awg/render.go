@@ -100,8 +100,16 @@ func RenderClient(hub Hub, c Client, granted []Grant) string {
 	fmt.Fprintf(&b, "[Interface]\n")
 	fmt.Fprintf(&b, "Address = %s/32\n", c.Address.String())
 	fmt.Fprintf(&b, "PrivateKey = %s\n", c.Keys.Private)
-	// Per-client DNS wins; else global Hub.DNS. Empty = no DNS line.
+	// DNS precedence: explicit per-client > a granted node's DNS > global hub DNS.
 	dns := c.DNS
+	if dns == "" {
+		for _, g := range granted {
+			if g.NodeDNS != "" {
+				dns = g.NodeDNS
+				break
+			}
+		}
+	}
 	if dns == "" {
 		dns = hub.DNS
 	}

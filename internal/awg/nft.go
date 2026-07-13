@@ -45,18 +45,34 @@ func RenderNFT(hub Hub, grants []Grant) string {
 	b.WriteString("  }\n")
 	b.WriteString("}\n")
 
-	// NAT: masquerade the pool out the WAN iface so internet-exit clients get a
-	// return path. Harmless when unused (filter forward drops non-granted flows;
-	// node-bound traffic egresses awg0, not the WAN iface).
+	// NAT table: masquerade for internet-exit + DNS DNAT for node DNS servers.
+	b.WriteString("\nadd table ip awgnat\nflush table ip awgnat\n")
+	b.WriteString("table ip awgnat {\n")
+
+	// DNS force-redirect: any granted client whose node has a DNS server gets its
+	// port-53 traffic DNAT'd to that server, so internal domains resolve no matter
+	// what resolver the client actually uses (mirrors the known-good setup).
+	b.WriteString("  chain prerouting {\n")
+	b.WriteString("    type nat hook prerouting priority dstnat; policy accept;\n")
+	for _, g := range grants {
+		if g.NodeDNS == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "    ip saddr %s udp dport 53 dnat to %s\n", g.ClientAddr.String(), g.NodeDNS)
+		fmt.Fprintf(&b, "    ip saddr %s tcp dport 53 dnat to %s\n", g.ClientAddr.String(), g.NodeDNS)
+	}
+	b.WriteString("  }\n")
+
+	// Masquerade the pool out the WAN iface so internet-exit clients get a return
+	// path. Harmless when unused (filter forward drops non-granted flows).
 	if hub.WANIface != "" {
-		fmt.Fprintf(&b, "\nadd table ip awgnat\nflush table ip awgnat\n")
-		fmt.Fprintf(&b, "table ip awgnat {\n")
-		fmt.Fprintf(&b, "  chain postrouting {\n")
-		fmt.Fprintf(&b, "    type nat hook postrouting priority srcnat; policy accept;\n")
+		b.WriteString("  chain postrouting {\n")
+		b.WriteString("    type nat hook postrouting priority srcnat; policy accept;\n")
 		fmt.Fprintf(&b, "    ip saddr %s oifname %q masquerade\n", hub.PoolCIDR.String(), hub.WANIface)
-		fmt.Fprintf(&b, "  }\n}\n")
+		b.WriteString("  }\n")
 	}
 
+	b.WriteString("}\n")
 	return b.String()
 }
 
