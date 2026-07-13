@@ -20,6 +20,28 @@ device's traffic into home LANs that sit behind CGNAT, via a VPS relay.
 - Node subnets must not overlap (WireGuard cryptokey routing picks the node by
   its `AllowedIPs`).
 
+## Install via curl
+
+One command on a fresh box; it asks whether to install the **panel** or a **node**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOURUSER/beautifulwg/main/scripts/install.sh | sudo bash
+```
+
+Non-interactive:
+
+```bash
+curl -fsSL .../install.sh | sudo bash -s -- panel   # or: node
+```
+
+- **panel** installs AmneziaWG (module+tools), Docker, clones the repo to
+  `/opt/beautifulwg`, generates `.env` (prompts for endpoint + admin password),
+  enables IP forwarding, and runs `docker compose up -d --build`.
+- **node** installs AmneziaWG, enables forwarding, asks you to paste the node
+  `.conf` downloaded from the panel, and enables `awg-quick@awg0` at boot.
+
+Replace `YOURUSER` with your GitHub repo (or set `REPO_URL=` env before running).
+
 ## Host prerequisites (VPS hub)
 
 The `backend` container runs in the host network namespace with `NET_ADMIN` so it
