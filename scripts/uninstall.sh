@@ -138,6 +138,7 @@ remove_node() {
   if [ -n "$PURGE_AWG" ]; then
     remove_awg_module
     rm -f /usr/bin/awg /usr/bin/awg-quick
+    rm -rf /usr/share/doc/amneziawg-tools
   else
     info "keeping AmneziaWG module + tools (set PURGE_AWG=1 to remove)"
   fi
