@@ -26,6 +26,15 @@ func (a Applier) Apply(hubConf, nftRules string) error {
 		return nil
 	}
 
+	// Ensure parent dirs exist. A bind-mounted /etc/amnezia can shadow the dir
+	// the image created, so create it at runtime rather than at build time.
+	if err := os.MkdirAll(a.ConfDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir conf dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(a.NFTFile), 0o700); err != nil {
+		return fmt.Errorf("mkdir nft dir: %w", err)
+	}
+
 	if err := os.WriteFile(confPath, []byte(hubConf), 0o600); err != nil {
 		return fmt.Errorf("write hub conf: %w", err)
 	}
