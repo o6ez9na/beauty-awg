@@ -1,22 +1,16 @@
-// nodeagent runs ON a home node. Two roles, both optional:
+// nodeagent runs ON a home node. On first run it has no config: the web UI shows
+// a single field to enter the panel's IP and a Connect button. Connecting sends
+// an enrollment request to that panel; once the admin approves, the panel pushes
+// the config and the agent applies it (config push over CGNAT via polling).
 //
-//  1. Enrollment + push (when PANEL_URL is set): generates a local keypair,
-//     announces itself to the panel, waits for admin approval, then pulls its
-//     awg config and keeps it in sync (config push over CGNAT via polling). The
-//     private key never leaves the node — the panel sends a placeholder that the
-//     agent substitutes locally.
-//  2. Web editor (when NODE_PASSWORD is set): a LAN browser UI to view/edit the
-//     awg config and re-apply it.
+// The node's LAN subnet + interface are auto-detected. The private key is
+// generated locally and never leaves the node (the panel sends a placeholder the
+// agent substitutes).
 //
 // Env:
-//   PANEL_URL       panel base URL, e.g. http://1.2.3.4:3000 (enables enrollment)
-//   ENROLL_SECRET   shared secret required to enroll
-//   NODE_NAME       display name (default: hostname)
-//   LAN_IFACE       LAN interface to expose (default: eth0)
-//   SUBNETS         comma-separated LAN subnets, e.g. 192.168.1.0/24
-//   STATE_FILE      keypair+token store (default /var/lib/awg-nodeagent/state.json)
-//   NODE_PASSWORD   HTTP Basic password for the web editor (user "admin")
-//   NODE_LISTEN     web editor listen addr (default ":8088")
+//   NODE_PASSWORD   HTTP Basic password for the web UI (user "admin")
+//   NODE_LISTEN     web UI listen addr (default ":8088")
+//   STATE_FILE      keypair+token+panel store (default /var/lib/awg-nodeagent/state.json)
 //   AWG_IFACE       interface (default "awg0")
 //   AWG_CONF        config path (default /etc/amnezia/amneziawg/awg0.conf)
 package main
@@ -27,13 +21,18 @@ import (
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"beautifulwg/internal/awg"
@@ -43,153 +42,203 @@ import (
 var indexHTML []byte
 
 var (
-	panelURL     = strings.TrimRight(os.Getenv("PANEL_URL"), "/")
-	enrollSecret = os.Getenv("ENROLL_SECRET")
-	nodeName     = os.Getenv("NODE_NAME")
-	lanIface     = env("LAN_IFACE", "eth0")
-	subnetsEnv   = os.Getenv("SUBNETS")
-	stateFile    = env("STATE_FILE", "/var/lib/awg-nodeagent/state.json")
-	password     = os.Getenv("NODE_PASSWORD")
-	listen       = env("NODE_LISTEN", ":8088")
-	iface        = env("AWG_IFACE", "awg0")
-	confPath     = env("AWG_CONF", "/etc/amnezia/amneziawg/awg0.conf")
+	password  = os.Getenv("NODE_PASSWORD")
+	listen    = env("NODE_LISTEN", ":8088")
+	stateFile = env("STATE_FILE", "/var/lib/awg-nodeagent/state.json")
+	iface     = env("AWG_IFACE", "awg0")
+	confPath  = env("AWG_CONF", "/etc/amnezia/amneziawg/awg0.conf")
 )
 
 type state struct {
 	Private string `json:"private"`
 	Public  string `json:"public"`
 	Token   string `json:"token"`
+	Panel   string `json:"panel"` // normalized panel base URL
 }
 
+// agent holds mutable runtime state shared between the HTTP handlers and the
+// polling loop.
+type agent struct {
+	mu      sync.Mutex
+	st      state
+	status  string // last poll result: "" | pending | active | rejected
+	polling bool
+}
+
+var a = &agent{}
+
 func main() {
-	if panelURL != "" {
-		go enrollLoop()
+	if st, err := loadState(); err == nil {
+		a.st = st
+	}
+	// Resume polling if we've already connected to a panel.
+	if a.st.Panel != "" && a.st.Token != "" {
+		a.startPolling()
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", serveIndex)
+	mux.HandleFunc("GET /api/state", auth(getState))
+	mux.HandleFunc("POST /api/connect", auth(connect))
 	mux.HandleFunc("GET /api/config", auth(getConfig))
 	mux.HandleFunc("POST /api/config", auth(applyConfig))
 	mux.HandleFunc("GET /api/status", auth(getStatus))
 
-	log.Printf("node agent on %s (iface=%s panel=%q)", listen, iface, panelURL)
+	log.Printf("node agent on %s (iface=%s)", listen, iface)
 	log.Fatal(http.ListenAndServe(listen, mux))
 }
 
-// ---------------- enrollment + push ----------------
+// ---------------- connect + enrollment ----------------
 
-func enrollLoop() {
-	st, err := loadOrInitState()
+type stateResp struct {
+	Enrolled bool   `json:"enrolled"`
+	Status   string `json:"status"`
+	Panel    string `json:"panel"`
+	Subnet   string `json:"subnet"`
+	Iface    string `json:"iface"`
+}
+
+func getState(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	resp := stateResp{Enrolled: a.st.Token != "", Status: a.status, Panel: a.st.Panel}
+	a.mu.Unlock()
+	if ifc, sn, err := detectLAN(); err == nil {
+		resp.Iface = ifc
+		resp.Subnet = sn.String()
+	}
+	writeJSON(w, resp)
+}
+
+type connectReq struct {
+	Panel string `json:"panel"`
+}
+
+func connect(w http.ResponseWriter, r *http.Request) {
+	var req connectReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	panelURL, err := normalizePanel(req.Panel)
 	if err != nil {
-		log.Printf("state init failed: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ifc, subnet, err := detectLAN()
+	if err != nil {
+		http.Error(w, "could not auto-detect LAN: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Enroll (idempotent on the panel side; safe to repeat). Updates st.Token.
-	if err := enroll(&st); err != nil {
-		log.Printf("enroll request failed: %v (will keep polling)", err)
-	}
-
-	var lastApplied string
-	for {
-		status, config, err := poll(st.Token)
+	a.mu.Lock()
+	if a.st.Private == "" {
+		kp, err := awg.GenerateKeypair()
 		if err != nil {
-			log.Printf("poll: %v", err)
-		} else {
-			switch status {
-			case "active":
-				full := strings.ReplaceAll(config, awg.NodePrivatePlaceholder, st.Private)
-				if full != lastApplied {
-					if err := writeAndApply(full); err != nil {
-						log.Printf("apply pushed config: %v", err)
-					} else {
-						lastApplied = full
-						log.Printf("applied config from panel")
-					}
-				}
-			case "pending":
-				// waiting for admin approval
-			case "rejected":
-				log.Printf("enrollment rejected by admin")
-			}
+			a.mu.Unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		time.Sleep(15 * time.Second)
+		a.st.Private, a.st.Public = kp.Private, kp.Public
 	}
+	a.st.Panel = panelURL
+	st := a.st
+	a.mu.Unlock()
+
+	if err := enroll(st, ifc, subnet); err != nil {
+		http.Error(w, "enroll failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	a.startPolling()
+	writeJSON(w, map[string]string{"status": "requested"})
 }
 
-func loadOrInitState() (state, error) {
-	var st state
-	if b, err := os.ReadFile(stateFile); err == nil {
-		if json.Unmarshal(b, &st) == nil && st.Private != "" {
-			return st, nil
-		}
-	}
-	kp, err := awg.GenerateKeypair()
-	if err != nil {
-		return st, err
-	}
-	st = state{Private: kp.Private, Public: kp.Public}
-	return st, saveState(st)
-}
-
-func saveState(st state) error {
-	if err := os.MkdirAll(filepath.Dir(stateFile), 0o700); err != nil {
-		return err
-	}
-	b, _ := json.Marshal(st)
-	return os.WriteFile(stateFile, b, 0o600)
-}
-
-func enroll(st *state) error {
+func enroll(st state, lanIface string, subnet netip.Prefix) error {
 	host, _ := os.Hostname()
-	name := nodeName
-	if name == "" {
-		name = host
-	}
-	subnets := splitCSV(subnetsEnv)
 	body, _ := json.Marshal(map[string]any{
-		"secret":     enrollSecret,
-		"name":       name,
+		"name":       host,
 		"hostname":   host,
 		"lan_iface":  lanIface,
 		"public_key": st.Public,
-		"subnets":    subnets,
+		"subnets":    []string{subnet.String()},
 	})
-	resp, err := http.Post(panelURL+"/api/enroll", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(st.Panel+"/api/enroll", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return &httpErr{resp.StatusCode, string(rb)}
+		return fmt.Errorf("panel said %d: %s", resp.StatusCode, strings.TrimSpace(string(rb)))
 	}
 	var out struct{ Token, Status string }
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return err
 	}
-	if out.Token != "" && out.Token != st.Token {
-		st.Token = out.Token
-		if err := saveState(*st); err != nil {
-			return err
-		}
+	a.mu.Lock()
+	a.st.Token = out.Token
+	a.status = out.Status
+	toSave := a.st
+	a.mu.Unlock()
+	if err := saveState(toSave); err != nil {
+		return err
 	}
-	log.Printf("enrolled: status=%s", out.Status)
+	log.Printf("enrolled to %s: status=%s", st.Panel, out.Status)
 	return nil
 }
 
-func poll(token string) (status, config string, err error) {
-	if token == "" {
-		return "", "", &httpErr{0, "no token yet"}
+// startPolling launches the poll loop once.
+func (a *agent) startPolling() {
+	a.mu.Lock()
+	if a.polling {
+		a.mu.Unlock()
+		return
 	}
-	resp, err := http.Get(panelURL + "/api/enroll/" + token)
+	a.polling = true
+	a.mu.Unlock()
+	go a.pollLoop()
+}
+
+func (a *agent) pollLoop() {
+	var lastApplied string
+	for {
+		a.mu.Lock()
+		panel, token, priv := a.st.Panel, a.st.Token, a.st.Private
+		a.mu.Unlock()
+
+		if panel != "" && token != "" {
+			status, config, err := poll(panel, token)
+			if err != nil {
+				log.Printf("poll: %v", err)
+			} else {
+				a.mu.Lock()
+				a.status = status
+				a.mu.Unlock()
+				if status == "active" && config != "" {
+					full := strings.ReplaceAll(config, awg.NodePrivatePlaceholder, priv)
+					if full != lastApplied {
+						if err := writeAndApply(full); err != nil {
+							log.Printf("apply pushed config: %v", err)
+						} else {
+							lastApplied = full
+							log.Printf("applied config from panel")
+						}
+					}
+				}
+			}
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func poll(panel, token string) (status, config string, err error) {
+	resp, err := http.Get(panel + "/api/enroll/" + token)
 	if err != nil {
 		return "", "", err
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", "", &httpErr{resp.StatusCode, string(rb)}
+		return "", "", fmt.Errorf("panel said %d", resp.StatusCode)
 	}
 	var out struct{ Status, Config string }
 	if err := json.Unmarshal(rb, &out); err != nil {
@@ -198,8 +247,73 @@ func poll(token string) (status, config string, err error) {
 	return out.Status, out.Config, nil
 }
 
-// writeAndApply writes the config and reloads the interface (down+up so PostUp
-// masquerade takes effect), restoring the previous config on failure.
+// ---------------- LAN auto-detection ----------------
+
+// detectLAN finds the primary interface (the one with the default route) and its
+// IPv4 subnet, e.g. ("ens18", 192.168.1.0/24).
+func detectLAN() (string, netip.Prefix, error) {
+	out, err := exec.Command("ip", "-o", "route", "get", "1.1.1.1").Output()
+	if err != nil {
+		return "", netip.Prefix{}, err
+	}
+	fields := strings.Fields(string(out))
+	var dev, src string
+	for i := 0; i < len(fields)-1; i++ {
+		switch fields[i] {
+		case "dev":
+			dev = fields[i+1]
+		case "src":
+			src = fields[i+1]
+		}
+	}
+	if dev == "" || src == "" {
+		return "", netip.Prefix{}, fmt.Errorf("no default route")
+	}
+	srcAddr, err := netip.ParseAddr(src)
+	if err != nil {
+		return "", netip.Prefix{}, err
+	}
+	ifc, err := net.InterfaceByName(dev)
+	if err != nil {
+		return "", netip.Prefix{}, err
+	}
+	addrs, _ := ifc.Addrs()
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.To4() == nil {
+			continue
+		}
+		ones, _ := ipnet.Mask.Size()
+		p := netip.PrefixFrom(srcAddr, ones).Masked()
+		if p.Contains(srcAddr) {
+			return dev, p, nil
+		}
+	}
+	return "", netip.Prefix{}, fmt.Errorf("no IPv4 subnet on %s", dev)
+}
+
+// normalizePanel turns user input ("150.241.89.70", "1.2.3.4:3000",
+// "http://host:3000") into a base URL. Defaults to http:// and port 3000.
+func normalizePanel(in string) (string, error) {
+	in = strings.TrimSpace(in)
+	if in == "" {
+		return "", fmt.Errorf("panel address required")
+	}
+	if !strings.Contains(in, "://") {
+		in = "http://" + in
+	}
+	u, err := url.Parse(in)
+	if err != nil || u.Hostname() == "" {
+		return "", fmt.Errorf("invalid panel address")
+	}
+	if u.Port() == "" {
+		u.Host = u.Host + ":3000"
+	}
+	return u.Scheme + "://" + u.Host, nil
+}
+
+// ---------------- config apply ----------------
+
 func writeAndApply(config string) error {
 	if old, err := os.ReadFile(confPath); err == nil {
 		_ = os.WriteFile(confPath+".bak", old, 0o600)
@@ -217,12 +331,12 @@ func writeAndApply(config string) error {
 			_ = os.WriteFile(confPath, bak, 0o600)
 			run(&out, "awg-quick", "up", iface)
 		}
-		return &httpErr{0, out.String()}
+		return fmt.Errorf("%s", out.String())
 	}
 	return nil
 }
 
-// ---------------- web editor ----------------
+// ---------------- web UI (editor, shown once active) ----------------
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -232,7 +346,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 func auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if password == "" {
-			http.Error(w, "web editor disabled (no NODE_PASSWORD)", http.StatusServiceUnavailable)
+			http.Error(w, "web UI disabled (no NODE_PASSWORD)", http.StatusServiceUnavailable)
 			return
 		}
 		_, pass, ok := r.BasicAuth()
@@ -266,7 +380,6 @@ func applyConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := writeAndApply(string(body)); err != nil {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		return
@@ -286,16 +399,26 @@ func getStatus(w http.ResponseWriter, r *http.Request) {
 
 // ---------------- helpers ----------------
 
-type httpErr struct {
-	code int
-	msg  string
+func loadState() (state, error) {
+	var st state
+	b, err := os.ReadFile(stateFile)
+	if err != nil {
+		return st, err
+	}
+	return st, json.Unmarshal(b, &st)
 }
 
-func (e *httpErr) Error() string {
-	if e.code == 0 {
-		return e.msg
+func saveState(st state) error {
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o700); err != nil {
+		return err
 	}
-	return http.StatusText(e.code) + ": " + e.msg
+	b, _ := json.Marshal(st)
+	return os.WriteFile(stateFile, b, 0o600)
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func run(out *strings.Builder, name string, args ...string) int {
@@ -313,16 +436,6 @@ func run(out *strings.Builder, name string, args ...string) int {
 		return 1
 	}
 	return 0
-}
-
-func splitCSV(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func env(k, def string) string {

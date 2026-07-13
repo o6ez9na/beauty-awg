@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"net/netip"
 
@@ -11,7 +10,6 @@ import (
 // --- node-side enrollment (gated by the shared enroll secret, no cookie) ---
 
 type enrollReq struct {
-	Secret    string   `json:"secret"`
 	Name      string   `json:"name"`
 	Hostname  string   `json:"hostname"`
 	LANIface  string   `json:"lan_iface"`
@@ -19,22 +17,11 @@ type enrollReq struct {
 	Subnets   []string `json:"subnets"`
 }
 
+// handleEnroll registers a node as pending. No secret: the admin approves each
+// request manually in the panel, which is the gate.
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	var req enrollReq
 	if !decodeJSON(w, r, &req) {
-		return
-	}
-	secret, err := s.St.GetEnrollSecret(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if secret == "" {
-		http.Error(w, "enrollment disabled", http.StatusForbidden)
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(secret), []byte(req.Secret)) != 1 {
-		http.Error(w, "bad enroll secret", http.StatusUnauthorized)
 		return
 	}
 	if req.PublicKey == "" || req.LANIface == "" || len(req.Subnets) == 0 {
