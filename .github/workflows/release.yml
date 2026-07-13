@@ -15,17 +15,26 @@ permissions:
   packages: write
 
 jobs:
-  # ---- server: build each platform on its own runner, push by digest ----
+  # ---- server: build each image × platform on its own runner, push by digest ----
   docker:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        component:
+          # backend panel (Go) — root Dockerfile
+          - name: panel-api
+            context: .
+            dockerfile: ./Dockerfile
+          # frontend web UI (Next.js) — web/Dockerfile
+          - name: panel-web
+            context: ./web
+            dockerfile: ./web/Dockerfile
         platform:
           - linux/amd64
           - linux/arm64
     env:
-      IMAGE: ghcr.io/${{ github.repository }}/panel
+      IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.component.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,11 +64,12 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.component.context }}
+          file: ${{ matrix.component.dockerfile }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          cache-from: type=gha,scope=${{ matrix.component.name }}-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}-${{ env.PLATFORM_PAIR }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -71,23 +81,27 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digest-${{ env.PLATFORM_PAIR }}
+          name: digest-${{ matrix.component.name }}-${{ env.PLATFORM_PAIR }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  # ---- server: assemble the multi-arch manifest from the per-platform digests ----
+  # ---- server: assemble each image's multi-arch manifest from its digests ----
   docker-merge:
     runs-on: ubuntu-latest
     needs: [docker]
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [panel-api, panel-web]
     env:
-      IMAGE: ghcr.io/${{ github.repository }}/panel
+      IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.component }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digest-*
+          pattern: digest-${{ matrix.component }}-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
