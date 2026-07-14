@@ -32,6 +32,7 @@ func (s *Store) GetHub(ctx context.Context) (awg.Hub, error) {
 	h.Params.H1, h.Params.H2 = uint32(h1), uint32(h2)
 	h.Params.H3, h.Params.H4 = uint32(h3), uint32(h4)
 	h.Resolver = s.ResolverOn
+	h.ResolverPort = s.ResolverPort
 	return h, nil
 }
 

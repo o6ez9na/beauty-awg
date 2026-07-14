@@ -21,6 +21,8 @@ type Store struct {
 	// ResolverOn reflects whether the hub runs the split-horizon DNS resolver;
 	// it flips client configs to use the hub tunnel IP as DNS.
 	ResolverOn bool
+	// ResolverPort is the resolver's local port (client :53 is nft-redirected here).
+	ResolverPort int
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {

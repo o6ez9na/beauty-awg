@@ -55,7 +55,14 @@ func RenderNFT(hub Hub, grants []Grant) string {
 	// prerouting DNAT would otherwise hijack those queries before they arrive).
 	b.WriteString("  chain prerouting {\n")
 	b.WriteString("    type nat hook prerouting priority dstnat; policy accept;\n")
-	if !hub.Resolver {
+	if hub.Resolver {
+		// Redirect client DNS (to the hub tunnel IP:53) to the resolver's local
+		// port. This bypasses anything else already bound to :53 on the host.
+		if hub.ResolverPort > 0 {
+			fmt.Fprintf(&b, "    ip daddr %s udp dport 53 redirect to :%d\n", hub.Address.String(), hub.ResolverPort)
+			fmt.Fprintf(&b, "    ip daddr %s tcp dport 53 redirect to :%d\n", hub.Address.String(), hub.ResolverPort)
+		}
+	} else {
 		for _, g := range grants {
 			if g.NodeDNS == "" {
 				continue
