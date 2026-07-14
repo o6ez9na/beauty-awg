@@ -44,7 +44,7 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.component.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Prepare platform pair
         run: echo "PLATFORM_PAIR=${{ matrix.platform }}" | tr '/' '-' >> "$GITHUB_ENV"
@@ -163,7 +163,7 @@ jobs:
           - goos: windows
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -214,7 +214,7 @@ jobs:
           check-latest: true
 
       - name: Checkout amneziawg-go
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: amnezia-vpn/amneziawg-go
           ref: ${{ env.AWG_GO_REF }}
@@ -277,7 +277,7 @@ jobs:
             git build-essential libmnl-dev
 
       - name: Checkout amneziawg-tools
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: amnezia-vpn/amneziawg-tools
           ref: ${{ env.AWG_TOOLS_REF }}
