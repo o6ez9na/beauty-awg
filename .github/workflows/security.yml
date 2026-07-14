@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload OSV SARIF to Security tab
         if: always() && hashFiles('osv-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: osv-results.sarif
           category: osv-scanner
@@ -246,7 +246,7 @@ jobs:
             --sarif --output semgrep.sarif
       - name: Upload Semgrep SARIF to Security tab
         if: always() && hashFiles('semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -277,7 +277,7 @@ jobs:
           args: -no-fail -fmt sarif -out gosec.sarif ./...
       - name: Upload gosec SARIF to Security tab
         if: always() && hashFiles('gosec.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: gosec.sarif
           category: gosec
