@@ -78,7 +78,7 @@ jobs:
       # Pass 1 -> SARIF for the GitHub Security tab (informational surface).
       - name: OSV-Scanner (SARIF)
         continue-on-error: true # non-zero exit on findings is expected; gate decides
-        uses: google/osv-scanner-action@v2.2.2 # verify tag on bump; Dependabot keeps it fresh
+        uses: google/osv-scanner-action@v2.3.8 # verify tag on bump; Dependabot keeps it fresh
         with:
           scan-args: |-
             --recursive
@@ -95,7 +95,7 @@ jobs:
       # Pass 2 -> JSON, so the gate can read per-advisory CVSS (max_severity).
       - name: OSV-Scanner (JSON)
         continue-on-error: true
-        uses: google/osv-scanner-action@v2.2.2
+        uses: google/osv-scanner-action@v2.3.8
         with:
           scan-args: |-
             --recursive
