@@ -16,8 +16,10 @@ name: Security
 # ---------------------------------------------------------------------------
 
 on:
-  push:          # every push to any branch AND every tag (no filter = all refs)
-  pull_request:
+  push:
+    branches: [main] # main only — feature branches are covered by their PR run
+    tags: ["**"] # every tag (release gating)
+  pull_request: # every PR (feature-branch commits land here, not in push)
   workflow_call: # lets release.yml run this as a prerequisite gate
 
 permissions:
