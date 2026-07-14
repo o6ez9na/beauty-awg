@@ -1,0 +1,23 @@
+# Background dependency automation — free, native to GitHub, separate from the
+# security.yml CI gate. Opens PRs to bump vulnerable/outdated deps on a schedule.
+version: 2
+updates:
+  # Go modules (root go.mod)
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  # npm (JS/TS project under web/)
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  # Keep the pinned GitHub Actions (incl. security actions) up to date.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
