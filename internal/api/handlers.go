@@ -64,7 +64,8 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateNodeReq struct {
-	DNS string `json:"dns"`
+	DNS     string   `json:"dns"`
+	Domains []string `json:"domains"`
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +78,10 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.St.SetNodeDNS(r.Context(), id, req.DNS); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.St.SetNodeDomains(r.Context(), id, req.Domains); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

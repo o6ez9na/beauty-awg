@@ -11,6 +11,7 @@ import (
 	"beautifulwg/internal/api"
 	"beautifulwg/internal/awg"
 	"beautifulwg/internal/config"
+	"beautifulwg/internal/resolver"
 	"beautifulwg/internal/service"
 	"beautifulwg/internal/store"
 )
@@ -52,7 +53,16 @@ func main() {
 		NFTFile: cfg.NFTFile,
 		DryRun:  cfg.DryRun,
 	}
-	svc := &service.Service{St: st, Applier: applier}
+	svc := &service.Service{St: st, Applier: applier, Upstream: cfg.DNSUpstream}
+
+	// Optional split-horizon DNS resolver on the hub tunnel IP.
+	if cfg.ResolverListen != "" && !cfg.DryRun {
+		res := resolver.New()
+		res.Serve(cfg.ResolverListen)
+		svc.Resolver = res
+		st.ResolverOn = true
+		log.Printf("split-horizon DNS resolver on %s (upstream %s)", cfg.ResolverListen, cfg.DNSUpstream)
+	}
 
 	srv := &api.Server{
 		St:            st,

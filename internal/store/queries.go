@@ -31,6 +31,7 @@ func (s *Store) GetHub(ctx context.Context) (awg.Hub, error) {
 	h.PoolCIDR, _ = netip.ParsePrefix(pool)
 	h.Params.H1, h.Params.H2 = uint32(h1), uint32(h2)
 	h.Params.H3, h.Params.H4 = uint32(h3), uint32(h4)
+	h.Resolver = s.ResolverOn
 	return h, nil
 }
 
@@ -108,7 +109,8 @@ func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, n.name, host(n.address), n.lan_iface,
 		       n.private_key, n.public_key, n.preshared, n.is_hub, n.dns,
-		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
+		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		WHERE n.status = 'active' AND n.address IS NOT NULL
@@ -125,7 +127,7 @@ func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 		var addr string
 		var subnets []string
 		if err := rows.Scan(&nr.ID, &nr.Node.Name, &addr, &nr.Node.LANIface,
-			&nr.Node.Keys.Private, &nr.Node.Keys.Public, &nr.Node.Preshared, &nr.Node.IsHub, &nr.Node.DNS, &subnets); err != nil {
+			&nr.Node.Keys.Private, &nr.Node.Keys.Public, &nr.Node.Preshared, &nr.Node.IsHub, &nr.Node.DNS, &subnets, &nr.Node.Domains); err != nil {
 			return nil, err
 		}
 		nr.Node.Address, _ = netip.ParseAddr(addr)

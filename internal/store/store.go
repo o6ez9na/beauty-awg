@@ -18,6 +18,9 @@ var migrationFS embed.FS
 // with net/netip to avoid pgtype registration quirks for inet/cidr.
 type Store struct {
 	Pool *pgxpool.Pool
+	// ResolverOn reflects whether the hub runs the split-horizon DNS resolver;
+	// it flips client configs to use the hub tunnel IP as DNS.
+	ResolverOn bool
 }
 
 func Open(ctx context.Context, dsn string) (*Store, error) {

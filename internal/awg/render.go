@@ -100,18 +100,25 @@ func RenderClient(hub Hub, c Client, granted []Grant) string {
 	fmt.Fprintf(&b, "[Interface]\n")
 	fmt.Fprintf(&b, "Address = %s/32\n", c.Address.String())
 	fmt.Fprintf(&b, "PrivateKey = %s\n", c.Keys.Private)
-	// DNS precedence: explicit per-client > a granted node's DNS > global hub DNS.
-	dns := c.DNS
-	if dns == "" {
-		for _, g := range granted {
-			if g.NodeDNS != "" {
-				dns = g.NodeDNS
-				break
+	// DNS: with the hub resolver on, clients always point at the hub tunnel IP and
+	// the resolver does split-horizon per domain. Otherwise fall back to the old
+	// precedence: explicit per-client > a granted node's DNS > global hub DNS.
+	var dns string
+	if hub.Resolver {
+		dns = hub.Address.String()
+	} else {
+		dns = c.DNS
+		if dns == "" {
+			for _, g := range granted {
+				if g.NodeDNS != "" {
+					dns = g.NodeDNS
+					break
+				}
 			}
 		}
-	}
-	if dns == "" {
-		dns = hub.DNS
+		if dns == "" {
+			dns = hub.DNS
+		}
 	}
 	if dns != "" {
 		fmt.Fprintf(&b, "DNS = %s\n", dns)

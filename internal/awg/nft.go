@@ -50,16 +50,19 @@ func RenderNFT(hub Hub, grants []Grant) string {
 	b.WriteString("table ip awgnat {\n")
 
 	// DNS force-redirect: any granted client whose node has a DNS server gets its
-	// port-53 traffic DNAT'd to that server, so internal domains resolve no matter
-	// what resolver the client actually uses (mirrors the known-good setup).
+	// port-53 traffic DNAT'd to that server. Skipped when the hub resolver is on
+	// (clients then send DNS to the hub and the resolver does split-horizon — a
+	// prerouting DNAT would otherwise hijack those queries before they arrive).
 	b.WriteString("  chain prerouting {\n")
 	b.WriteString("    type nat hook prerouting priority dstnat; policy accept;\n")
-	for _, g := range grants {
-		if g.NodeDNS == "" {
-			continue
+	if !hub.Resolver {
+		for _, g := range grants {
+			if g.NodeDNS == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "    ip saddr %s udp dport 53 dnat to %s\n", g.ClientAddr.String(), g.NodeDNS)
+			fmt.Fprintf(&b, "    ip saddr %s tcp dport 53 dnat to %s\n", g.ClientAddr.String(), g.NodeDNS)
 		}
-		fmt.Fprintf(&b, "    ip saddr %s udp dport 53 dnat to %s\n", g.ClientAddr.String(), g.NodeDNS)
-		fmt.Fprintf(&b, "    ip saddr %s tcp dport 53 dnat to %s\n", g.ClientAddr.String(), g.NodeDNS)
 	}
 	b.WriteString("  }\n")
 

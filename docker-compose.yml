@@ -49,6 +49,10 @@ services:
       # Host's internet-facing interface, for full-tunnel exit masquerade.
       HUB_WAN_IFACE: ${HUB_WAN_IFACE:-eth0}
       HUB_DNS: ${HUB_DNS:-}
+      # Split-horizon DNS resolver on the hub tunnel IP. Clients point DNS here
+      # and it forwards per-domain to the right node's DNS. Empty disables it.
+      RESOLVER_LISTEN: ${RESOLVER_LISTEN-${HUB_ADDRESS:-10.8.0.1}:53}
+      DNS_UPSTREAM: ${DNS_UPSTREAM:-1.1.1.1:53}
       # Shared secret nodes present to self-enroll. Empty = enrollment disabled.
       HUB_ENROLL_SECRET: ${HUB_ENROLL_SECRET:-}
       ADMIN_USER: ${ADMIN_USER:-admin}
