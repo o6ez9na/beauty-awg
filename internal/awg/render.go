@@ -100,12 +100,23 @@ func RenderClient(hub Hub, c Client, granted []Grant) string {
 	fmt.Fprintf(&b, "[Interface]\n")
 	fmt.Fprintf(&b, "Address = %s/32\n", c.Address.String())
 	fmt.Fprintf(&b, "PrivateKey = %s\n", c.Keys.Private)
-	// DNS: with the hub resolver on, clients always point at the hub tunnel IP and
-	// the resolver does split-horizon per domain. Otherwise fall back to the old
-	// precedence: explicit per-client > a granted node's DNS > global hub DNS.
+	// DNS: with the hub resolver on, clients point at the hub tunnel IP. We also
+	// append the granted nodes' local domains as DNS search domains so that
+	// wg-quick/systemd-resolved routes ONLY those domains to the tunnel resolver
+	// (split-DNS), with no manual client setup — internet DNS stays default.
 	var dns string
 	if hub.Resolver {
-		dns = hub.Address.String()
+		parts := []string{hub.Address.String()}
+		seen := map[string]bool{}
+		for _, g := range granted {
+			for _, d := range g.Domains {
+				if d != "" && !seen[d] {
+					seen[d] = true
+					parts = append(parts, d)
+				}
+			}
+		}
+		dns = strings.Join(parts, ", ")
 	} else {
 		dns = c.DNS
 		if dns == "" {
