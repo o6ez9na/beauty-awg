@@ -103,7 +103,10 @@ func (s *Store) SetNodeDomains(ctx context.Context, id uuid.UUID, domains []stri
 		}
 		for _, d := range domains {
 			d = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(d, ".")))
-			if d == "" {
+			// Accept wildcard syntax like "*.greeneye.top" — the resolver matches
+			// by suffix, so strip a leading "*." (or bare "*.") to the zone.
+			d = strings.TrimPrefix(d, "*.")
+			if d == "" || d == "*" {
 				continue
 			}
 			if _, err := tx.Exec(ctx,
