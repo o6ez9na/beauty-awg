@@ -15,8 +15,16 @@ permissions:
   packages: write
 
 jobs:
+  # ---- gate: run the full security pipeline first; nothing ships if it fails ----
+  security:
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      security-events: write
+
   # ---- server: build each image × platform on its own runner, push by digest ----
   docker:
+    needs: [security]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -140,6 +148,7 @@ jobs:
 
   # ---- client: cross-compile nodeagent binaries and attach to the release ----
   binaries:
+    needs: [security]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -189,6 +198,7 @@ jobs:
   # ---- client: build the userspace backend (amneziawg-go) for headerless hosts ----
   # Fallback the installer pulls when the kernel module can't be built (WSL2 etc).
   awg-go:
+    needs: [security]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -246,6 +256,7 @@ jobs:
   # Built natively per-arch (awg is a C binary; awg-quick is an arch-independent
   # bash script) to avoid cross-compiling libmnl.
   awg-tools:
+    needs: [security]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

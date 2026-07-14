@@ -1,0 +1,266 @@
+name: Security
+
+# ---------------------------------------------------------------------------
+# Free / OSS-only security pipeline for this JS-TS (web/) + Go (root) monorepo.
+# Three layers per language:
+#   SCA (deps)  : OSV-Scanner (both) + npm audit (JS) + govulncheck (Go)
+#   SAST (code) : Semgrep OSS (both) + gosec / go vet (Go)
+#   Secrets     : Gitleaks (whole repo, language-agnostic)
+#
+# Severity policy:
+#   BLOCKING       -> high/critical dep CVEs, reachable Go vulns, leaked secrets
+#   INFORMATIONAL  -> SAST findings, go vet (reported via SARIF / logs, never fail)
+# Each job is tagged [BLOCKING] or [INFO] in its name. The final `security-gate`
+# job aggregates the blocking results into a single required status that
+# release.yml gates on (this workflow is also callable via workflow_call).
+# ---------------------------------------------------------------------------
+
+on:
+  push:          # every push to any branch AND every tag (no filter = all refs)
+  pull_request:
+  workflow_call: # lets release.yml run this as a prerequisite gate
+
+permissions:
+  contents: read
+  security-events: write # required to upload SARIF to the Security tab
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded runs on PRs only; never cancel a release-gating run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOVULNCHECK_VERSION: v1.1.4 # pinned so the go-install cache key is stable
+
+jobs:
+  # -------------------------------------------------------------------------
+  # detect: figure out which stacks exist so Go/JS jobs stay conditional even
+  # if the repo layout changes. Exposes booleans + the JS directory.
+  # -------------------------------------------------------------------------
+  detect:
+    name: Detect stacks
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+      js: ${{ steps.check.outputs.js }}
+      js_dir: ${{ steps.check.outputs.js_dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ -f go.mod ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+          # First package.json outside node_modules decides the JS project dir.
+          pkg="$(find . -name node_modules -prune -o -name package.json -print | head -n1)"
+          if [ -n "$pkg" ]; then
+            echo "js=true" >> "$GITHUB_OUTPUT"
+            echo "js_dir=$(dirname "$pkg")" >> "$GITHUB_OUTPUT"
+          else
+            echo "js=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # =========================================================================
+  # SCA (dependencies)
+  # =========================================================================
+
+  # OSV-Scanner covers BOTH package-lock.json and go.mod in one recursive pass.
+  # [BLOCKING] but only on high/critical (CVSS >= 7.0) — enforced by the gate
+  # step below, since osv-scanner itself exits non-zero on any severity.
+  osv-scanner:
+    name: OSV-Scanner (JS+Go SCA) [BLOCKING high/critical]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pass 1 -> SARIF for the GitHub Security tab (informational surface).
+      - name: OSV-Scanner (SARIF)
+        continue-on-error: true # non-zero exit on findings is expected; gate decides
+        uses: google/osv-scanner-action@v2.2.2 # verify tag on bump; Dependabot keeps it fresh
+        with:
+          scan-args: |-
+            --recursive
+            --format=sarif
+            --output=osv-results.sarif
+            ./
+      - name: Upload OSV SARIF
+        if: always() && hashFiles('osv-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: osv-results.sarif
+          category: osv-scanner
+
+      # Pass 2 -> JSON, so the gate can read per-advisory CVSS (max_severity).
+      - name: OSV-Scanner (JSON)
+        continue-on-error: true
+        uses: google/osv-scanner-action@v2.2.2
+        with:
+          scan-args: |-
+            --recursive
+            --format=json
+            --output=osv-results.json
+            ./
+
+      - name: Gate on high/critical only
+        run: |
+          if [ ! -f osv-results.json ]; then
+            echo "No OSV output produced; treating as clean."; exit 0
+          fi
+          high=$(jq '[.results[]?.packages[]?.groups[]?.max_severity
+                      | select(. != null and . != "")
+                      | tonumber | select(. >= 7.0)] | length' osv-results.json)
+          echo "High/critical vulnerable dependency groups: ${high}"
+          if [ "${high}" -gt 0 ]; then
+            echo "::error::OSV-Scanner found ${high} high/critical dependency vuln(s)."
+            exit 1
+          fi
+          echo "Only low/medium (or unscored) findings — informational, not blocking."
+
+  # npm audit natively honours a severity threshold. [BLOCKING] on high+.
+  npm-audit:
+    name: npm audit (JS SCA) [BLOCKING high]
+    needs: detect
+    if: needs.detect.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ needs.detect.outputs.js_dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm # caches the npm download cache
+          cache-dependency-path: ${{ needs.detect.outputs.js_dir }}/package-lock.json
+      - name: npm audit (high+)
+        # Reads package-lock.json directly; no install needed. Fails on high+.
+        run: npm audit --audit-level=high
+
+  # govulncheck adds reachability analysis on top of OSV data. A reported vuln
+  # is one that is actually reachable from your code, so treat it as [BLOCKING].
+  govulncheck:
+    name: govulncheck (Go SCA, reachability) [BLOCKING]
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true # caches Go module + build cache (keyed on go.sum)
+      - name: Cache govulncheck binary
+        id: cache-govulncheck
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/govulncheck
+          key: govulncheck-${{ runner.os }}-${{ env.GOVULNCHECK_VERSION }}
+      - name: Install govulncheck
+        if: steps.cache-govulncheck.outputs.cache-hit != 'true'
+        run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  # =========================================================================
+  # SAST (your own code) — INFORMATIONAL: reported, never fails the build.
+  # =========================================================================
+
+  # Semgrep OSS with free registry rulesets (no token; that's the paid cloud).
+  semgrep:
+    name: Semgrep OSS (JS+Go SAST) [INFO]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Semgrep OSS
+        run: pip install --quiet semgrep
+      - name: Semgrep scan (SARIF)
+        continue-on-error: true # SAST findings are informational
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/javascript \
+            --config p/golang \
+            --sarif --output semgrep.sarif
+      - name: Upload Semgrep SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # gosec + go vet for Go source. INFORMATIONAL (-no-fail / continue-on-error).
+  gosec:
+    name: gosec + go vet (Go SAST) [INFO]
+    needs: detect
+    if: needs.detect.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run gosec (SARIF)
+        uses: securego/gosec@master
+        with:
+          # -no-fail keeps it informational; SARIF goes to the Security tab.
+          args: -no-fail -fmt sarif -out gosec.sarif ./...
+      - name: Upload gosec SARIF
+        if: always() && hashFiles('gosec.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+      - name: go vet
+        continue-on-error: true # informational
+        run: go vet ./...
+
+  # =========================================================================
+  # Secrets — Gitleaks over the whole repo + history. [BLOCKING] on any leak.
+  # =========================================================================
+  gitleaks:
+    name: Gitleaks (secrets) [BLOCKING]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so past commits are scanned too
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NOTE: gitleaks-action is free for personal repos. Only GitHub *org*
+          # accounts need a free GITLEAKS_LICENSE key (see instructions).
+
+  # =========================================================================
+  # Gate — single required status. Fails if ANY blocking job failed.
+  # Informational jobs (semgrep, gosec) are intentionally excluded.
+  # release.yml uses this as its prerequisite via `needs`.
+  # =========================================================================
+  security-gate:
+    name: Security gate [BLOCKING]
+    if: always()
+    needs: [osv-scanner, npm-audit, govulncheck, gitleaks]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate blocking checks
+        run: |
+          # Skipped (a stack not present) is OK; failure/cancelled is not.
+          for r in \
+            "osv-scanner=${{ needs.osv-scanner.result }}" \
+            "npm-audit=${{ needs.npm-audit.result }}" \
+            "govulncheck=${{ needs.govulncheck.result }}" \
+            "gitleaks=${{ needs.gitleaks.result }}"; do
+            name="${r%%=*}"; res="${r#*=}"
+            echo "${name}: ${res}"
+            if [ "${res}" = "failure" ] || [ "${res}" = "cancelled" ]; then
+              echo "::error::Blocking security check '${name}' did not pass."
+              failed=1
+            fi
+          done
+          if [ "${failed:-0}" = "1" ]; then exit 1; fi
+          echo "All blocking security checks passed."
