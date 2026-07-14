@@ -199,7 +199,8 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, host(n.address), n.dns,
-		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
+		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
 		FROM grants g
 		JOIN nodes n ON n.id = g.node_id
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
@@ -217,11 +218,11 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	for rows.Next() {
 		var nodeID uuid.UUID
 		var naddr, ndns string
-		var subnets []string
-		if err := rows.Scan(&nodeID, &naddr, &ndns, &subnets); err != nil {
+		var subnets, domains []string
+		if err := rows.Scan(&nodeID, &naddr, &ndns, &subnets, &domains); err != nil {
 			return awg.Hub{}, awg.Client{}, nil, err
 		}
-		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns}
+		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns, Domains: domains}
 		g.NodeAddr, _ = netip.ParseAddr(naddr)
 		for _, sn := range subnets {
 			if p, e := netip.ParsePrefix(sn); e == nil {
