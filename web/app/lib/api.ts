@@ -12,6 +12,7 @@ export interface Node {
   last_seen: string | null;
   is_hub: boolean;
   dns: string;
+  domains: string[];
 }
 
 export interface Client {
@@ -63,7 +64,8 @@ export const api = {
   createNode: (name: string, lan_iface: string, subnets: string[]) =>
     req<{ id: string; address: string }>("POST", "/api/nodes", { name, lan_iface, subnets }),
   deleteNode: (id: string) => req<void>("DELETE", `/api/nodes/${id}`),
-  updateNode: (id: string, dns: string) => req<void>("PATCH", `/api/nodes/${id}`, { dns }),
+  updateNode: (id: string, dns: string, domains: string[]) =>
+    req<void>("PATCH", `/api/nodes/${id}`, { dns, domains }),
   approveNode: (id: string) => req<void>("POST", `/api/nodes/${id}/approve`),
   rejectNode: (id: string) => req<void>("POST", `/api/nodes/${id}/reject`),
 

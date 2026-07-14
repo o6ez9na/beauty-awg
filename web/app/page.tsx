@@ -84,6 +84,48 @@ export default function Dashboard() {
   );
 }
 
+// DNS + local-domains cells for one node. Saves both together on blur so the
+// hub resolver forwards those domains to this node's DNS (split-horizon).
+function NodeNetCells({
+  node,
+  onChange,
+}: {
+  node: Node;
+  onChange: (fn: () => Promise<void>) => void;
+}) {
+  const [dns, setDns] = useState(node.dns);
+  const [domains, setDomains] = useState(node.domains.join(", "));
+
+  if (node.is_hub) {
+    return (
+      <>
+        <td className="mono">—</td>
+        <td className="mono">—</td>
+      </>
+    );
+  }
+
+  function save() {
+    const list = domains.split(",").map((s) => s.trim()).filter(Boolean);
+    if (dns !== node.dns || list.join(",") !== node.domains.join(",")) {
+      onChange(() => api.updateNode(node.id, dns, list));
+    }
+  }
+
+  return (
+    <>
+      <td>
+        <input type="text" value={dns} placeholder="192.168.1.1" style={{ width: 120 }}
+          onChange={(e) => setDns(e.target.value)} onBlur={save} />
+      </td>
+      <td>
+        <input type="text" value={domains} placeholder="home.lan, pi.hole" style={{ width: 160 }}
+          onChange={(e) => setDomains(e.target.value)} onBlur={save} />
+      </td>
+    </>
+  );
+}
+
 // ---------------- Nodes ----------------
 
 function NodesCard({
@@ -159,6 +201,7 @@ function NodesCard({
             <th>LAN subnets</th>
             <th>LAN iface</th>
             <th>DNS</th>
+            <th>Local domains</th>
             <th>Last seen</th>
             <th></th>
           </tr>
@@ -170,21 +213,7 @@ function NodesCard({
               <td className="mono">{n.address}</td>
               <td className="mono">{n.subnets.join(", ")}</td>
               <td className="mono">{n.lan_iface}</td>
-              <td>
-                {n.is_hub ? (
-                  <span className="mono">—</span>
-                ) : (
-                  <input
-                    type="text"
-                    defaultValue={n.dns}
-                    placeholder="192.168.1.1"
-                    style={{ width: 120 }}
-                    onBlur={(e) => {
-                      if (e.target.value !== n.dns) onChange(() => api.updateNode(n.id, e.target.value));
-                    }}
-                  />
-                )}
-              </td>
+              <NodeNetCells node={n} onChange={onChange} />
               <td className="mono">
                 {n.is_hub ? "—" : n.last_seen ? new Date(n.last_seen).toLocaleString() : "—"}
               </td>
@@ -215,7 +244,7 @@ function NodesCard({
           ))}
           {active.length === 0 && (
             <tr>
-              <td colSpan={7} className="mono">
+              <td colSpan={8} className="mono">
                 no active nodes yet
               </td>
             </tr>

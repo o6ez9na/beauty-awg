@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"time"
 
 	"beautifulwg/internal/awg"
@@ -24,6 +25,7 @@ type NodeDTO struct {
 	LastSeen *time.Time `json:"last_seen"`
 	IsHub    bool       `json:"is_hub"`
 	DNS      string     `json:"dns"`
+	Domains  []string   `json:"domains"`
 }
 
 type ClientDTO struct {
@@ -39,7 +41,8 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, n.name, COALESCE(host(n.address), ''), n.lan_iface,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
-		       n.status, n.hostname, n.last_seen, n.is_hub, n.dns
+		       n.status, n.hostname, n.last_seen, n.is_hub, n.dns,
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		GROUP BY n.id ORDER BY n.is_hub DESC, n.status, n.address NULLS FIRST, n.name`)
@@ -51,7 +54,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	for rows.Next() {
 		var d NodeDTO
 		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets,
-			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS); err != nil {
+			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -90,6 +93,49 @@ func (s *Store) DeleteNode(ctx context.Context, id uuid.UUID) error {
 func (s *Store) SetNodeDNS(ctx context.Context, id uuid.UUID, dns string) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE nodes SET dns = $2 WHERE id = $1`, id, dns)
 	return err
+}
+
+// SetNodeDomains replaces the set of local domains a node's DNS is authoritative for.
+func (s *Store) SetNodeDomains(ctx context.Context, id uuid.UUID, domains []string) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM node_domains WHERE node_id = $1`, id); err != nil {
+			return err
+		}
+		for _, d := range domains {
+			d = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(d, ".")))
+			if d == "" {
+				continue
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO node_domains(node_id, domain) VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, d); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DomainRoutes returns the domain -> node-DNS map for active nodes that have both
+// a DNS server and at least one domain. Feeds the split-horizon resolver.
+func (s *Store) DomainRoutes(ctx context.Context) (map[string]string, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT d.domain, n.dns
+		FROM node_domains d
+		JOIN nodes n ON n.id = d.node_id
+		WHERE n.status = 'active' AND n.dns <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var domain, dns string
+		if err := rows.Scan(&domain, &dns); err != nil {
+			return nil, err
+		}
+		out[domain] = dns
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) DeleteClient(ctx context.Context, id uuid.UUID) error {

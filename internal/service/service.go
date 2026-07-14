@@ -6,14 +6,17 @@ import (
 	"sync"
 
 	"beautifulwg/internal/awg"
+	"beautifulwg/internal/resolver"
 	"beautifulwg/internal/store"
 )
 
 // Service is the glue: it turns current DB state into live hub config + nft
 // rules and applies them. Every mutation handler calls Reconcile afterward.
 type Service struct {
-	St      *store.Store
-	Applier awg.Applier
+	St       *store.Store
+	Applier  awg.Applier
+	Resolver *resolver.Resolver // optional split-horizon DNS resolver
+	Upstream string             // default DNS upstream, e.g. "1.1.1.1:53"
 
 	mu sync.Mutex // serialize reconciles so awg syncconf calls don't overlap
 }
@@ -42,5 +45,17 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		}
 		routes = append(routes, n.Subnets...)
 	}
-	return s.Applier.EnsureRoutes(routes)
+	if err := s.Applier.EnsureRoutes(routes); err != nil {
+		return err
+	}
+
+	// Rebuild the split-horizon resolver's domain->node-DNS map.
+	if s.Resolver != nil {
+		dr, err := s.St.DomainRoutes(ctx)
+		if err != nil {
+			return err
+		}
+		s.Resolver.SetRoutes(dr, s.Upstream)
+	}
+	return nil
 }

@@ -13,6 +13,8 @@ type Config struct {
 	NFTFile       string
 	DryRun        bool
 	SessionSecret string
+	ResolverListen string // e.g. "10.8.0.1:53"; empty disables the resolver
+	DNSUpstream    string // default upstream, e.g. "1.1.1.1:53"
 }
 
 func Load() (Config, error) {
@@ -22,8 +24,10 @@ func Load() (Config, error) {
 		AWGIface:      env("AWG_IFACE", "awg0"),
 		ConfDir:       env("AWG_CONF_DIR", "/etc/amnezia/amneziawg"),
 		NFTFile:       env("AWG_NFT_FILE", "/etc/awgpanel/acl.nft"),
-		DryRun:        env("AWG_DRY_RUN", "") != "",
-		SessionSecret: env("SESSION_SECRET", ""),
+		DryRun:         env("AWG_DRY_RUN", "") != "",
+		SessionSecret:  env("SESSION_SECRET", ""),
+		ResolverListen: env("RESOLVER_LISTEN", ""),
+		DNSUpstream:    env("DNS_UPSTREAM", "1.1.1.1:53"),
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")

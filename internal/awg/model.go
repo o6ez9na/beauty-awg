@@ -12,6 +12,7 @@ type Hub struct {
 	Params     ObfuscationParams
 	DNS        string // optional DNS pushed to clients (e.g. 10.8.0.1)
 	WANIface   string // hub's internet-facing iface, for exit masquerade
+	Resolver   bool   // hub runs the split-horizon DNS resolver on its tunnel IP
 }
 
 // Node is a home server behind CGNAT. It dials OUT to the hub and owns one or
@@ -23,8 +24,9 @@ type Node struct {
 	Keys      Keypair
 	LANIface  string // interface facing the LAN, for masquerade (e.g. "eth0")
 	Preshared string // optional PSK shared with hub
-	IsHub     bool   // virtual node representing the hub itself (internet exit)
-	DNS       string // DNS server behind this node; forces granted clients' :53 here
+	IsHub     bool     // virtual node representing the hub itself (internet exit)
+	DNS       string   // DNS server behind this node
+	Domains   []string // local domains this node's DNS is authoritative for
 }
 
 // Client is a VPN user (laptop/phone). Gets a /32 tunnel IP.
