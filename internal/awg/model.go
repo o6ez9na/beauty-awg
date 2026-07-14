@@ -13,6 +13,7 @@ type Hub struct {
 	DNS        string // optional DNS pushed to clients (e.g. 10.8.0.1)
 	WANIface   string // hub's internet-facing iface, for exit masquerade
 	Resolver   bool   // hub runs the split-horizon DNS resolver on its tunnel IP
+	ResolverPort int  // resolver's local port; client :53 is nft-redirected here
 }
 
 // Node is a home server behind CGNAT. It dials OUT to the hub and owns one or

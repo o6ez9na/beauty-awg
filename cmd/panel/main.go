@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -55,8 +56,15 @@ func main() {
 	}
 	svc := &service.Service{St: st, Applier: applier, Upstream: cfg.DNSUpstream}
 
-	// Optional split-horizon DNS resolver on the hub tunnel IP.
+	// Optional split-horizon DNS resolver. It listens on a local port; nft
+	// redirects client :53 (to the hub tunnel IP) here, sidestepping anything
+	// else already bound to :53 on the host.
 	if cfg.ResolverListen != "" && !cfg.DryRun {
+		if _, portStr, err := net.SplitHostPort(cfg.ResolverListen); err == nil {
+			if p, err := strconv.Atoi(portStr); err == nil {
+				st.ResolverPort = p
+			}
+		}
 		res := resolver.New()
 		res.Serve(cfg.ResolverListen)
 		svc.Resolver = res
