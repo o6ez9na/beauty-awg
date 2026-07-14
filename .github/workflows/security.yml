@@ -31,6 +31,7 @@ concurrency:
 
 env:
   GOVULNCHECK_VERSION: v1.1.4 # pinned so the go-install cache key is stable
+  OSV_SCANNER_VERSION: v2.4.0 # pinned so the go-install cache key is stable
 
 jobs:
   # -------------------------------------------------------------------------
@@ -67,41 +68,73 @@ jobs:
   # =========================================================================
 
   # OSV-Scanner covers BOTH package-lock.json and go.mod in one recursive pass.
-  # [BLOCKING] but only on high/critical (CVSS >= 7.0) — enforced by the gate
-  # step below, since osv-scanner itself exits non-zero on any severity.
+  # We install the pinned binary directly (instead of the action) so we can emit
+  # THREE views of the same scan from one install:
+  #   - Markdown -> the run's Step Summary (human-readable, zero setup)
+  #   - JSON     -> the severity gate + downloadable artifact
+  #   - SARIF    -> the GitHub Security tab
+  # [BLOCKING] but only on high/critical (CVSS >= 7.0) — the gate step decides,
+  # since osv-scanner itself exits non-zero on ANY severity.
   osv-scanner:
     name: OSV-Scanner (JS+Go SCA) [BLOCKING high/critical]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # Pass 1 -> SARIF for the GitHub Security tab (informational surface).
-      - name: OSV-Scanner (SARIF)
-        continue-on-error: true # non-zero exit on findings is expected; gate decides
-        uses: google/osv-scanner-action@v2.2.2 # verify tag on bump; Dependabot keeps it fresh
+      - uses: actions/setup-go@v5
         with:
-          scan-args: |-
-            --recursive
-            --format=sarif
-            --output=osv-results.sarif
-            ./
-      - name: Upload OSV SARIF
+          go-version-file: go.mod
+          cache: true
+      - name: Cache osv-scanner binary
+        id: cache-osv
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/osv-scanner
+          key: osv-scanner-${{ runner.os }}-${{ env.OSV_SCANNER_VERSION }}
+      - name: Install osv-scanner
+        if: steps.cache-osv.outputs.cache-hit != 'true'
+        run: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@${{ env.OSV_SCANNER_VERSION }}
+
+      # One scan, three output files. `|| true` because a non-zero exit (vulns
+      # found) is expected here — the gate step below is what actually decides.
+      - name: Scan (JSON + SARIF + Markdown)
+        run: |
+          osv-scanner scan --recursive --format json     --output osv-results.json     ./ || true
+          osv-scanner scan --recursive --format sarif    --output osv-results.sarif    ./ || true
+          osv-scanner scan --recursive --format markdown --output osv-results.md       ./ || true
+
+      # Readable report you can click into from the run summary page.
+      - name: Write report to job summary
+        if: always()
+        run: |
+          {
+            echo "## OSV-Scanner — dependency vulnerabilities (JS + Go)"
+            echo
+            echo "_Each ID links to its advisory (cause, affected range, fixed version)._"
+            echo
+            if [ -s osv-results.md ]; then
+              cat osv-results.md
+            else
+              echo "No known vulnerabilities found. ✅"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OSV SARIF to Security tab
         if: always() && hashFiles('osv-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: osv-results.sarif
           category: osv-scanner
 
-      # Pass 2 -> JSON, so the gate can read per-advisory CVSS (max_severity).
-      - name: OSV-Scanner (JSON)
-        continue-on-error: true
-        uses: google/osv-scanner-action@v2.2.2
+      - name: Upload OSV reports (downloadable)
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          scan-args: |-
-            --recursive
-            --format=json
-            --output=osv-results.json
-            ./
+          name: osv-scanner-reports
+          path: |
+            osv-results.json
+            osv-results.sarif
+            osv-results.md
+          if-no-files-found: ignore
 
       - name: Gate on high/critical only
         run: |
@@ -113,7 +146,7 @@ jobs:
                       | tonumber | select(. >= 7.0)] | length' osv-results.json)
           echo "High/critical vulnerable dependency groups: ${high}"
           if [ "${high}" -gt 0 ]; then
-            echo "::error::OSV-Scanner found ${high} high/critical dependency vuln(s)."
+            echo "::error::OSV-Scanner found ${high} high/critical dependency vuln(s). See the job summary."
             exit 1
           fi
           echo "Only low/medium (or unscored) findings — informational, not blocking."
@@ -134,8 +167,36 @@ jobs:
           node-version: 20
           cache: npm # caches the npm download cache
           cache-dependency-path: ${{ needs.detect.outputs.js_dir }}/package-lock.json
-      - name: npm audit (high+)
-        # Reads package-lock.json directly; no install needed. Fails on high+.
+      # Full audit -> readable summary + artifact (never fails on its own).
+      - name: npm audit report
+        if: always()
+        run: |
+          npm audit --json > npm-audit.json 2>/dev/null || true
+          {
+            echo "## npm audit — JS/TS dependency vulnerabilities"
+            echo
+            if [ -s npm-audit.json ]; then
+              jq -r '
+                (.metadata.vulnerabilities // {}) as $v
+                | "**Totals:** critical \($v.critical // 0), high \($v.high // 0), moderate \($v.moderate // 0), low \($v.low // 0)\n",
+                "| Package | Severity | Via | Fix available |",
+                "|---|---|---|---|",
+                (.vulnerabilities // {} | to_entries[]
+                  | "| \(.key) | \(.value.severity) | \((.value.via // []) | map(if type==\"string\" then . else .title end) | join(\", \")) | \(.value.fixAvailable | if . == true then \"yes\" elif . == false then \"no\" else \"see advisory\" end) |")
+              ' npm-audit.json || echo "Could not parse npm audit output."
+            else
+              echo "No audit output (no lockfile or registry unreachable)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload npm audit report (downloadable)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: ${{ needs.detect.outputs.js_dir }}/npm-audit.json
+          if-no-files-found: ignore
+      # Reads package-lock.json directly; no install needed. [BLOCKING] on high+.
+      - name: npm audit gate (high+)
         run: npm audit --audit-level=high
 
   # govulncheck adds reachability analysis on top of OSV data. A reported vuln
@@ -160,8 +221,47 @@ jobs:
       - name: Install govulncheck
         if: steps.cache-govulncheck.outputs.cache-hit != 'true'
         run: go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+
+      # Run once, capture the full human-readable report (traces + fix versions).
+      # continue-on-error so the report/summary steps below still run on findings;
+      # the gate step re-checks the captured exit code to enforce blocking.
       - name: Run govulncheck
-        run: govulncheck ./...
+        id: gvc
+        continue-on-error: true
+        run: |
+          set +e
+          govulncheck ./... > govulncheck.txt 2>&1
+          code=$?
+          echo "exit=${code}" >> "$GITHUB_OUTPUT"
+          cat govulncheck.txt
+          exit 0
+      - name: Write report to job summary
+        if: always()
+        run: |
+          {
+            echo "## govulncheck — reachable Go vulnerabilities"
+            echo
+            echo "_Reachability analysis: only vulns your code can actually call are"
+            echo "listed. Each 'GO-YYYY-NNNN' has details + fix at https://pkg.go.dev/vuln._"
+            echo
+            echo '```'
+            cat govulncheck.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload govulncheck report (downloadable)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: govulncheck-report
+          path: govulncheck.txt
+          if-no-files-found: ignore
+      - name: Gate
+        run: |
+          if [ "${{ steps.gvc.outputs.exit }}" != "0" ]; then
+            echo "::error::govulncheck found reachable vulnerabilities. See the job summary."
+            exit 1
+          fi
+          echo "No reachable vulnerabilities."
 
   # =========================================================================
   # SAST (your own code) — INFORMATIONAL: reported, never fails the build.
