@@ -97,26 +97,52 @@ func RenderNode(hub Hub, n Node) string {
 func RenderClient(hub Hub, c Client, granted []Grant) string {
 	var b strings.Builder
 
+	// Collect granted dests (rule dests if any, else full subnets). Always
+	// include the hub tunnel IP for DNS/reachability.
+	allowed := []string{hub.Address.String() + "/32"}
+	for _, g := range granted {
+		for _, d := range g.dests() {
+			allowed = append(allowed, d.String())
+		}
+	}
+	// If a full tunnel (0.0.0.0/0) is present, collapse to just that: the other
+	// entries are subsets of it, and a mixed list alongside 0.0.0.0/0 breaks
+	// route/metric handling in some clients (notably wireguard-windows), which
+	// can send TCP out the wrong interface while ICMP still works.
+	fullTunnel := false
+	for _, a := range allowed {
+		if a == "0.0.0.0/0" {
+			allowed = []string{"0.0.0.0/0"}
+			fullTunnel = true
+			break
+		}
+	}
+
 	fmt.Fprintf(&b, "[Interface]\n")
 	fmt.Fprintf(&b, "Address = %s/32\n", c.Address.String())
 	fmt.Fprintf(&b, "PrivateKey = %s\n", c.Keys.Private)
-	// DNS: with the hub resolver on, clients point at the hub tunnel IP. We also
-	// append the granted nodes' local domains as DNS search domains so that
-	// wg-quick/systemd-resolved routes ONLY those domains to the tunnel resolver
-	// (split-DNS), with no manual client setup — internet DNS stays default.
+	// DNS. With the resolver on: full-tunnel clients just point at the hub IP (all
+	// DNS already flows through the tunnel to the resolver). Split-tunnel clients
+	// also list the granted nodes' domains as search domains so only those route
+	// to the tunnel resolver. Some Windows clients choke on a mixed IP+domain DNS
+	// line, so we avoid it when full-tunnel makes it unnecessary.
 	var dns string
 	if hub.Resolver {
-		parts := []string{hub.Address.String()}
-		seen := map[string]bool{}
-		for _, g := range granted {
-			for _, d := range g.Domains {
-				if d != "" && !seen[d] {
-					seen[d] = true
-					parts = append(parts, d)
+		if fullTunnel {
+			dns = hub.Address.String()
+		} else {
+			parts := []string{hub.Address.String()}
+			seen := map[string]bool{}
+			for _, g := range granted {
+				for _, d := range g.Domains {
+					if d != "" && !seen[d] {
+						seen[d] = true
+						parts = append(parts, d)
+					}
 				}
 			}
+			dns = strings.Join(parts, ", ")
 		}
-		dns = strings.Join(parts, ", ")
 	} else {
 		dns = c.DNS
 		if dns == "" {
@@ -135,15 +161,6 @@ func RenderClient(hub Hub, c Client, granted []Grant) string {
 		fmt.Fprintf(&b, "DNS = %s\n", dns)
 	}
 	b.WriteString(paramsBlock(hub.Params))
-
-	// Collect granted dests (rule dests if any, else full subnets). Always
-	// include the hub tunnel IP for DNS/reachability.
-	allowed := []string{hub.Address.String() + "/32"}
-	for _, g := range granted {
-		for _, d := range g.dests() {
-			allowed = append(allowed, d.String())
-		}
-	}
 
 	fmt.Fprintf(&b, "\n# hub\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.Keys.Public)

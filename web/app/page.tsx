@@ -11,7 +11,7 @@ export default function Dashboard() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [err, setErr] = useState("");
-  const [modal, setModal] = useState<{ title: string; url: string; filename: string } | null>(null);
+  const [modal, setModal] = useState<{ title: string; url: string; filename: string; vpnLinkUrl?: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -77,6 +77,7 @@ export default function Dashboard() {
           title={modal.title}
           url={modal.url}
           filename={modal.filename}
+          vpnLinkUrl={modal.vpnLinkUrl}
           onClose={() => setModal(null)}
         />
       )}
@@ -135,7 +136,7 @@ function NodesCard({
 }: {
   nodes: Node[];
   onChange: (fn: () => Promise<void>) => void;
-  onConfig: (m: { title: string; url: string; filename: string }) => void;
+  onConfig: (m: { title: string; url: string; filename: string; vpnLinkUrl?: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [iface, setIface] = useState("eth0");
@@ -289,7 +290,7 @@ function ClientsCard({
   clients: Client[];
   nodes: Node[];
   onChange: (fn: () => Promise<void>) => void;
-  onConfig: (m: { title: string; url: string; filename: string }) => void;
+  onConfig: (m: { title: string; url: string; filename: string; vpnLinkUrl?: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [dns, setDns] = useState("");
@@ -362,6 +363,7 @@ function ClientsCard({
                       title: `Client: ${c.name}`,
                       url: api.clientConfigUrl(c.id),
                       filename: `${c.name}.conf`,
+                      vpnLinkUrl: api.clientVPNLinkUrl(c.id),
                     })
                   }
                 >

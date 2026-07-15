@@ -88,6 +88,7 @@ export const api = {
 
   // config endpoints return text/plain; consumed directly as URLs for download.
   clientConfigUrl: (id: string) => `/api/clients/${id}/config`,
+  clientVPNLinkUrl: (id: string) => `/api/clients/${id}/vpnlink`,
   nodeConfigUrl: (id: string) => `/api/nodes/${id}/config`,
   fetchText: async (url: string) => {
     const res = await fetch(url, { credentials: "same-origin" });
