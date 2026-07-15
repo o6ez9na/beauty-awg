@@ -151,8 +151,10 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	psk, _ := awg.GeneratePresharedKey()
-	id, addr, err := s.St.CreateClient(r.Context(), req.Name, req.DNS, keys, psk)
+	// No PSK for clients: the AmneziaVPN "vpn://" format has no PSK field, so the
+	// app connects without it — a PSK would break those clients. (.conf clients
+	// work fine without it.)
+	id, addr, err := s.St.CreateClient(r.Context(), req.Name, req.DNS, keys, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -216,6 +218,21 @@ func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeConf(w, client.Name, awg.RenderClient(hub, client, grants))
+}
+
+// handleClientVPNLink returns the native AmneziaVPN "vpn://" import link.
+func (s *Server) handleClientVPNLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	hub, client, grants, err := s.St.GetClientForExport(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(awg.RenderVPNLink(hub, client, grants)))
 }
 
 // --- grants ---
