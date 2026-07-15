@@ -2,16 +2,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { api, ApiError, Node, Client } from "./lib/api";
 import ConfigModal from "./components/ConfigModal";
+import AccessGraph from "./components/AccessGraph";
+
+type Modal = { title: string; url: string; filename: string; vpnLinkUrl?: string };
 
 export default function Dashboard() {
   const router = useRouter();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [tab, setTab] = useState<"nodes" | "clients">("clients");
   const [err, setErr] = useState("");
-  const [modal, setModal] = useState<{ title: string; url: string; filename: string; vpnLinkUrl?: string } | null>(null);
+  const [modal, setModal] = useState<Modal | null>(null);
+  const [selectedClient, setSelectedClient] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -19,17 +23,12 @@ export default function Dashboard() {
       setNodes(n || []);
       setClients(c || []);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        router.push("/login");
-        return;
-      }
+      if (e instanceof ApiError && e.status === 401) return router.push("/login");
       setErr(String(e));
     }
   }, [router]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   async function guard(fn: () => Promise<void>) {
     setErr("");
@@ -41,36 +40,60 @@ export default function Dashboard() {
     }
   }
 
+  const activeNodes = nodes.filter((n) => n.status === "active" && !n.is_hub);
+  const pending = nodes.filter((n) => n.status === "pending");
+
   return (
-    <>
+    <div className="shell">
       <header className="topbar">
-        <div className="brand">
-          beautiful<span style={{ color: "var(--accent)" }}>wg</span>
+        <div className="brand">beautiful<b>wg</b></div>
+        <div className="meshstat">
+          <span><b>{clients.length}</b> clients</span>
+          <span><b>{activeNodes.length}</b> nodes</span>
+          {pending.length > 0 && <span style={{ color: "var(--warn)" }}><b>{pending.length}</b> pending</span>}
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Link href="/graph">
-            <button className="ghost">Access graph</button>
-          </Link>
-          <button
-            className="ghost"
-            onClick={() => api.logout().then(() => router.push("/login"))}
-          >
-            Logout
-          </button>
-        </div>
+        <div className="spacer" />
+        <button className="ghost" onClick={() => api.logout().then(() => router.push("/login"))}>
+          Log out
+        </button>
       </header>
 
-      <div className="container">
-        {err && <div className="error">{err}</div>}
+      <aside className="rail">
+        <div className="rail-body">
+          <div className="seg" role="tablist">
+            <button className="seg-btn" role="tab" aria-selected={tab === "clients"} onClick={() => setTab("clients")}>
+              Clients <span className="seg-count">{clients.length}</span>
+            </button>
+            <button className="seg-btn" role="tab" aria-selected={tab === "nodes"} onClick={() => setTab("nodes")}>
+              Nodes <span className="seg-count">{activeNodes.length}</span>
+            </button>
+          </div>
 
-        <NodesCard nodes={nodes} onChange={guard} onConfig={setModal} />
-        <ClientsCard
-          clients={clients}
+          {err && <div className="error">{err}</div>}
+
+          {tab === "clients" ? (
+            <ClientsTab
+              clients={clients}
+              selected={selectedClient}
+              onSelect={setSelectedClient}
+              onChange={guard}
+              onConfig={setModal}
+            />
+          ) : (
+            <NodesTab nodes={nodes} onChange={guard} onConfig={setModal} />
+          )}
+        </div>
+      </aside>
+
+      <main className="stage">
+        <AccessGraph
           nodes={nodes}
-          onChange={guard}
-          onConfig={setModal}
+          clients={clients}
+          onChanged={load}
+          selectedClientId={selectedClient}
+          onError={setErr}
         />
-      </div>
+      </main>
 
       {modal && (
         <ConfigModal
@@ -81,30 +104,199 @@ export default function Dashboard() {
           onClose={() => setModal(null)}
         />
       )}
+    </div>
+  );
+}
+
+/* ---------------- Clients ---------------- */
+
+function ClientsTab({
+  clients, selected, onSelect, onChange, onConfig,
+}: {
+  clients: Client[];
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+  onChange: (fn: () => Promise<void>) => void;
+  onConfig: (m: Modal) => void;
+}) {
+  const [name, setName] = useState("");
+
+  function add() {
+    const n = name.trim();
+    if (!n) return;
+    // New clients always use the hub resolver (10.8.0.1) — no custom DNS.
+    onChange(async () => { await api.createClient(n, ""); setName(""); });
+  }
+
+  return (
+    <>
+      <p className="eyebrow">People who connect</p>
+      <div className="rows">
+        {clients.map((c) => (
+          <div
+            key={c.id}
+            className={"item" + (c.id === selected ? " selected" : "")}
+            onClick={() => onSelect(c.id === selected ? null : c.id)}
+          >
+            <div className="item-head">
+              <span className={"dot " + (c.enabled ? "live" : "stale")} />
+              <span className="item-name">{c.name}</span>
+              <span className="item-ip">{c.address}</span>
+            </div>
+            <div className="item-meta">
+              <span className="k">access</span>{" "}
+              {c.granted_nodes.length ? `${c.granted_nodes.length} node(s)` : "none yet — drag an arrow in the graph"}
+            </div>
+            <div className="item-actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                className="ghost"
+                onClick={() => onConfig({
+                  title: c.name,
+                  url: api.clientConfigUrl(c.id),
+                  filename: `${c.name}.conf`,
+                  vpnLinkUrl: api.clientVPNLinkUrl(c.id),
+                })}
+              >
+                Config &amp; QR
+              </button>
+              <span
+                className={"toggle" + (c.enabled ? " on" : "")}
+                onClick={() => onChange(() => api.updateClient(c.id, !c.enabled, ""))}
+              >
+                {c.enabled ? "● enabled" : "○ disabled"}
+              </span>
+              <button className="danger" style={{ marginLeft: "auto" }} onClick={() => onChange(() => api.deleteClient(c.id))}>
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+        {clients.length === 0 && <div className="empty">No clients yet. Add one below.</div>}
+      </div>
+
+      <div className="addbox">
+        <p className="eyebrow" style={{ margin: 0 }}>Add a client</p>
+        <div className="field">
+          <label>Name</label>
+          <input
+            type="text" value={name} placeholder="laptop"
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && add()}
+          />
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+          DNS is set to the hub resolver automatically.
+        </div>
+        <button className="btn" onClick={add} disabled={!name.trim()}>Add client</button>
+      </div>
     </>
   );
 }
 
-// DNS + local-domains cells for one node. Saves both together on blur so the
-// hub resolver forwards those domains to this node's DNS (split-horizon).
-function NodeNetCells({
-  node,
-  onChange,
+/* ---------------- Nodes ---------------- */
+
+function NodesTab({
+  nodes, onChange, onConfig,
 }: {
-  node: Node;
+  nodes: Node[];
   onChange: (fn: () => Promise<void>) => void;
+  onConfig: (m: Modal) => void;
 }) {
+  const [name, setName] = useState("");
+  const [iface, setIface] = useState("eth0");
+  const [subnets, setSubnets] = useState("");
+
+  const pending = nodes.filter((n) => n.status === "pending");
+  const active = nodes.filter((n) => n.status === "active");
+
+  function add() {
+    const list = subnets.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!name.trim() || !list.length) return;
+    onChange(async () => { await api.createNode(name.trim(), iface, list); setName(""); setSubnets(""); });
+  }
+
+  return (
+    <>
+      {pending.length > 0 && (
+        <>
+          <p className="eyebrow">Waiting for approval</p>
+          {pending.map((n) => (
+            <div key={n.id} className="pending">
+              <div className="pending-title">enrollment request</div>
+              <div className="item-head">
+                <span className="item-name">{n.name}</span>
+                <span className="item-ip">{n.hostname}</span>
+              </div>
+              <div className="item-meta">wants {n.subnets.join(", ")} · iface {n.lan_iface}</div>
+              <div className="item-actions">
+                <button className="btn" onClick={() => onChange(() => api.approveNode(n.id))}>Approve</button>
+                <button className="danger" onClick={() => onChange(() => api.rejectNode(n.id))}>Reject</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      <p className="eyebrow">Home servers</p>
+      <div className="rows">
+        {active.map((n) => (
+          <div key={n.id} className={"item" + (n.is_hub ? " exit" : "")}>
+            <div className="item-head">
+              <span className="item-name">{n.is_hub ? "◍ internet exit" : n.name}</span>
+              <span className="item-ip">{n.address}</span>
+            </div>
+            {n.is_hub ? (
+              <div className="item-meta"><span className="k">routes</span> 0.0.0.0/0 · the panel itself</div>
+            ) : (
+              <>
+                <div className="item-meta">
+                  <span className="k">lan</span> {n.subnets.join(", ")} · {n.lan_iface}
+                  {n.last_seen && <> · <span className="k">seen</span> {new Date(n.last_seen).toLocaleString()}</>}
+                </div>
+                <NodeNet node={n} onChange={onChange} />
+                <div className="item-actions">
+                  <button
+                    className="ghost"
+                    onClick={() => onConfig({ title: n.name, url: api.nodeConfigUrl(n.id), filename: `${n.name}.conf` })}
+                  >
+                    Config
+                  </button>
+                  <button className="danger" style={{ marginLeft: "auto" }} onClick={() => onChange(() => api.deleteNode(n.id))}>
+                    Delete
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+        {active.length === 0 && <div className="empty">No nodes yet. Add one below, or run the node installer.</div>}
+      </div>
+
+      <div className="addbox">
+        <p className="eyebrow" style={{ margin: 0 }}>Add a node manually</p>
+        <div className="field">
+          <label>Name</label>
+          <input type="text" value={name} placeholder="home1" onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>LAN subnets (comma-separated)</label>
+          <input type="text" value={subnets} placeholder="192.168.1.0/24" onChange={(e) => setSubnets(e.target.value)} />
+        </div>
+        <div className="field">
+          <label>LAN interface</label>
+          <input type="text" value={iface} onChange={(e) => setIface(e.target.value)} />
+        </div>
+        <button className="btn" onClick={add} disabled={!name.trim() || !subnets.trim()}>Add node</button>
+      </div>
+    </>
+  );
+}
+
+// DNS server + local domains for a node, saved together so the hub resolver
+// forwards those domains to this node's DNS.
+function NodeNet({ node, onChange }: { node: Node; onChange: (fn: () => Promise<void>) => void }) {
   const [dns, setDns] = useState(node.dns);
   const [domains, setDomains] = useState(node.domains.join(", "));
-
-  if (node.is_hub) {
-    return (
-      <>
-        <td className="mono">—</td>
-        <td className="mono">—</td>
-      </>
-    );
-  }
 
   function save() {
     const list = domains.split(",").map((s) => s.trim()).filter(Boolean);
@@ -114,294 +306,14 @@ function NodeNetCells({
   }
 
   return (
-    <>
-      <td>
-        <input type="text" value={dns} placeholder="192.168.1.1" style={{ width: 120 }}
-          onChange={(e) => setDns(e.target.value)} onBlur={save} />
-      </td>
-      <td>
-        <input type="text" value={domains} placeholder="home.lan, pi.hole" style={{ width: 160 }}
-          onChange={(e) => setDomains(e.target.value)} onBlur={save} />
-      </td>
-    </>
-  );
-}
-
-// ---------------- Nodes ----------------
-
-function NodesCard({
-  nodes,
-  onChange,
-  onConfig,
-}: {
-  nodes: Node[];
-  onChange: (fn: () => Promise<void>) => void;
-  onConfig: (m: { title: string; url: string; filename: string; vpnLinkUrl?: string }) => void;
-}) {
-  const [name, setName] = useState("");
-  const [iface, setIface] = useState("eth0");
-  const [subnets, setSubnets] = useState("");
-
-  function add() {
-    const list = subnets
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    onChange(async () => {
-      await api.createNode(name, iface, list);
-      setName("");
-      setSubnets("");
-    });
-  }
-
-  const pending = nodes.filter((n) => n.status === "pending");
-  const active = nodes.filter((n) => n.status === "active");
-
-  return (
-    <div className="card">
-      <h2>Nodes (home servers)</h2>
-
-      {pending.length > 0 && (
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ color: "var(--accent)", fontWeight: 600, marginBottom: 8 }}>
-            ● {pending.length} node{pending.length > 1 ? "s" : ""} waiting for approval
-          </div>
-          {pending.map((n) => (
-            <div
-              key={n.id}
-              className="row"
-              style={{
-                border: "1px solid var(--accent)",
-                borderRadius: 8,
-                padding: "10px 12px",
-                marginBottom: 8,
-                background: "rgba(47,129,247,0.08)",
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <b>{n.name}</b>{" "}
-                <span className="mono">({n.hostname})</span>
-                <div className="mono" style={{ marginTop: 4 }}>
-                  wants: {n.subnets.join(", ")} · iface {n.lan_iface}
-                </div>
-              </div>
-              <button onClick={() => onChange(() => api.approveNode(n.id))}>Approve</button>
-              <button className="danger" onClick={() => onChange(() => api.rejectNode(n.id))}>
-                Reject
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Tunnel IP</th>
-            <th>LAN subnets</th>
-            <th>LAN iface</th>
-            <th>DNS</th>
-            <th>Local domains</th>
-            <th>Last seen</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {active.map((n) => (
-            <tr key={n.id}>
-              <td>{n.name}</td>
-              <td className="mono">{n.address}</td>
-              <td className="mono">{n.subnets.join(", ")}</td>
-              <td className="mono">{n.lan_iface}</td>
-              <NodeNetCells node={n} onChange={onChange} />
-              <td className="mono">
-                {n.is_hub ? "—" : n.last_seen ? new Date(n.last_seen).toLocaleString() : "—"}
-              </td>
-              <td className="actions">
-                {n.is_hub ? (
-                  <span className="mono">virtual (internet exit)</span>
-                ) : (
-                  <>
-                    <button
-                      className="ghost"
-                      onClick={() =>
-                        onConfig({
-                          title: `Node: ${n.name}`,
-                          url: api.nodeConfigUrl(n.id),
-                          filename: `${n.name}.conf`,
-                        })
-                      }
-                    >
-                      Config
-                    </button>
-                    <button className="danger" onClick={() => onChange(() => api.deleteNode(n.id))}>
-                      Delete
-                    </button>
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-          {active.length === 0 && (
-            <tr>
-              <td colSpan={8} className="mono">
-                no active nodes yet
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      <div className="row" style={{ marginTop: 16 }}>
-        <div className="field" style={{ flex: 1 }}>
-          <label>Name</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="home1" />
-        </div>
-        <div className="field" style={{ flex: 2 }}>
-          <label>LAN subnets (comma-separated)</label>
-          <input
-            type="text"
-            value={subnets}
-            onChange={(e) => setSubnets(e.target.value)}
-            placeholder="192.168.1.0/24, 10.31.31.0/24"
-          />
-        </div>
-        <div className="field" style={{ width: 120 }}>
-          <label>LAN iface</label>
-          <input type="text" value={iface} onChange={(e) => setIface(e.target.value)} />
-        </div>
-        <button onClick={add} disabled={!name || !subnets}>
-          Add node
-        </button>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+      <div className="field">
+        <label>DNS server</label>
+        <input type="text" value={dns} placeholder="192.168.1.1" onChange={(e) => setDns(e.target.value)} onBlur={save} />
       </div>
-    </div>
-  );
-}
-
-// ---------------- Clients ----------------
-
-function ClientsCard({
-  clients,
-  nodes,
-  onChange,
-  onConfig,
-}: {
-  clients: Client[];
-  nodes: Node[];
-  onChange: (fn: () => Promise<void>) => void;
-  onConfig: (m: { title: string; url: string; filename: string; vpnLinkUrl?: string }) => void;
-}) {
-  const [name, setName] = useState("");
-  const [dns, setDns] = useState("");
-
-  function add() {
-    onChange(async () => {
-      await api.createClient(name, dns);
-      setName("");
-      setDns("");
-    });
-  }
-
-  function toggleGrant(c: Client, nodeId: string) {
-    const has = c.granted_nodes.includes(nodeId);
-    onChange(() => (has ? api.revoke(c.id, nodeId) : api.grant(c.id, nodeId)));
-  }
-
-  return (
-    <div className="card">
-      <h2>Clients (users)</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Tunnel IP</th>
-            <th>Enabled</th>
-            <th>DNS</th>
-            <th>Access to nodes</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {clients.map((c) => (
-            <tr key={c.id}>
-              <td>{c.name}</td>
-              <td className="mono">{c.address}</td>
-              <td>
-                <span
-                  className={"toggle" + (c.enabled ? " on" : "")}
-                  onClick={() => onChange(() => api.updateClient(c.id, !c.enabled, c.dns))}
-                >
-                  {c.enabled ? "● on" : "○ off"}
-                </span>
-              </td>
-              <td className="mono">{c.dns || "(hub default)"}</td>
-              <td>
-                {nodes
-                  .filter((n) => n.status === "active")
-                  .map((n) => {
-                    const on = c.granted_nodes.includes(n.id);
-                    return (
-                      <span
-                        key={n.id}
-                        className={"chip" + (on ? " on" : "")}
-                        onClick={() => toggleGrant(c, n.id)}
-                      >
-                        {on ? "✓" : "＋"} {n.name}
-                      </span>
-                    );
-                  })}
-                {nodes.filter((n) => n.status === "active").length === 0 && (
-                  <span className="mono">add a node first</span>
-                )}
-              </td>
-              <td className="actions">
-                <button
-                  className="ghost"
-                  onClick={() =>
-                    onConfig({
-                      title: `Client: ${c.name}`,
-                      url: api.clientConfigUrl(c.id),
-                      filename: `${c.name}.conf`,
-                      vpnLinkUrl: api.clientVPNLinkUrl(c.id),
-                    })
-                  }
-                >
-                  Config / QR
-                </button>
-                <button className="danger" onClick={() => onChange(() => api.deleteClient(c.id))}>
-                  Delete
-                </button>
-              </td>
-            </tr>
-          ))}
-          {clients.length === 0 && (
-            <tr>
-              <td colSpan={6} className="mono">
-                no clients yet
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-
-      <div className="row" style={{ marginTop: 16 }}>
-        <div className="field" style={{ flex: 1 }}>
-          <label>Name</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="laptop" />
-        </div>
-        <div className="field" style={{ flex: 1 }}>
-          <label>Custom DNS (optional, comma-separated)</label>
-          <input
-            type="text"
-            value={dns}
-            onChange={(e) => setDns(e.target.value)}
-            placeholder="1.1.1.1, 8.8.8.8"
-          />
-        </div>
-        <button onClick={add} disabled={!name}>
-          Add client
-        </button>
+      <div className="field">
+        <label>Local domains</label>
+        <input type="text" value={domains} placeholder="home.lan" onChange={(e) => setDomains(e.target.value)} onBlur={save} />
       </div>
     </div>
   );

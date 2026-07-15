@@ -37,7 +37,10 @@ export default function RulesModal({
     setRules((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
   function addRule() {
-    setRules((rs) => [...rs, { dest: subnetHints[0] || "", proto: "any", port_from: 0, port_to: 0 }]);
+    setRules((rs) => [
+      ...rs,
+      { dest: subnetHints[0] || "", proto: "any", port_from: 0, port_to: 0 },
+    ]);
   }
   function removeRule(i: number) {
     setRules((rs) => rs.filter((_, j) => j !== i));
@@ -58,9 +61,14 @@ export default function RulesModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ width: 560, textAlign: "left" }} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        style={{ width: 560, textAlign: "left" }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <h2 style={{ marginTop: 0 }}>
-          Access level: <span style={{ color: "var(--accent)" }}>{clientName}</span> →{" "}
+          Access level:{" "}
+          <span style={{ color: "var(--accent)" }}>{clientName}</span> →{" "}
           <span style={{ color: "var(--ok)" }}>{nodeName}</span>
         </h2>
         <p className="mono" style={{ marginTop: -6 }}>
@@ -75,23 +83,37 @@ export default function RulesModal({
         </datalist>
 
         {loaded && rules.length === 0 && (
-          <div className="mono" style={{ margin: "10px 0" }}>full access (no restrictions)</div>
+          <div className="mono" style={{ margin: "10px 0" }}>
+            full access (no restrictions)
+          </div>
         )}
 
         {rules.map((r, i) => (
-          <div key={i} className="row" style={{ marginBottom: 8, gap: 6, flexWrap: "nowrap" }}>
+          <div
+            key={i}
+            className="row"
+            style={{ marginBottom: 8, gap: 6, flexWrap: "nowrap" }}
+          >
             <input
               type="text"
               list="subnet-hints"
               placeholder="192.168.1.0/24"
               value={r.dest}
               onChange={(e) => update(i, { dest: e.target.value })}
-              style={{ flex: 2 }}
+              style={{ flex: 2, width: "100vw" }}
             />
             <select
               value={r.proto}
-              onChange={(e) => update(i, { proto: e.target.value as Rule["proto"] })}
-              style={{ background: "var(--panel2)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 7, padding: "8px" }}
+              onChange={(e) =>
+                update(i, { proto: e.target.value as Rule["proto"] })
+              }
+              style={{
+                background: "var(--ink)",
+                color: "var(--text)",
+                border: "1px solid var(--line)",
+                borderRadius: 7,
+                padding: "8px",
+              }}
             >
               <option value="any">any</option>
               <option value="tcp">tcp</option>
@@ -101,7 +123,9 @@ export default function RulesModal({
               type="text"
               placeholder="port"
               value={r.port_from || ""}
-              onChange={(e) => update(i, { port_from: parseInt(e.target.value) || 0 })}
+              onChange={(e) =>
+                update(i, { port_from: parseInt(e.target.value) || 0 })
+              }
               style={{ width: 70 }}
             />
             <span className="mono">–</span>
@@ -109,18 +133,28 @@ export default function RulesModal({
               type="text"
               placeholder="to"
               value={r.port_to || ""}
-              onChange={(e) => update(i, { port_to: parseInt(e.target.value) || 0 })}
+              onChange={(e) =>
+                update(i, { port_to: parseInt(e.target.value) || 0 })
+              }
               style={{ width: 70 }}
             />
-            <button className="danger" onClick={() => removeRule(i)}>✕</button>
+            <button className="danger" onClick={() => removeRule(i)}>
+              ✕
+            </button>
           </div>
         ))}
 
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="ghost" onClick={addRule}>+ Add rule</button>
+          <button className="ghost" onClick={addRule}>
+            + Add rule
+          </button>
           <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <button className="ghost" onClick={onClose}>Cancel</button>
-            <button onClick={save} disabled={busy}>{busy ? "…" : "Save"}</button>
+            <button className="ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn" onClick={save} disabled={busy}>
+              {busy ? "Saving…" : "Save"}
+            </button>
           </span>
         </div>
       </div>
