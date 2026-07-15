@@ -89,7 +89,7 @@ export default function ConfigModal({
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "center", flexWrap: "wrap" }}>
               {vpn && (
-                <button onClick={() => copy(vpn, "link")}>
+                <button className="btn" onClick={() => copy(vpn, "link")}>
                   {copied === "link" ? "Copied!" : "Copy vpn:// link"}
                 </button>
               )}
