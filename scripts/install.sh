@@ -277,6 +277,17 @@ install_awg_tools() {
 enable_forwarding() {
   info "enabling net.ipv4.ip_forward"
   echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-beautifulwg.conf
+  # Also persist in /etc/sysctl.conf: uncomment an existing entry if present,
+  # otherwise append one.
+  if [ -f /etc/sysctl.conf ]; then
+    if grep -qE '^[[:space:]]*#?[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=' /etc/sysctl.conf; then
+      sed -i -E 's|^[[:space:]]*#?[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=.*|net.ipv4.ip_forward=1|' /etc/sysctl.conf
+    else
+      echo 'net.ipv4.ip_forward=1' >>/etc/sysctl.conf
+    fi
+  else
+    echo 'net.ipv4.ip_forward=1' >/etc/sysctl.conf
+  fi
   sysctl -q -w net.ipv4.ip_forward=1
 }
 
