@@ -44,6 +44,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/clients/{id}/config", s.requireAuth(s.handleClientConfig))
 	mux.HandleFunc("GET /api/clients/{id}/vpnlink", s.requireAuth(s.handleClientVPNLink))
 
+	// graph layout (saved node positions)
+	mux.HandleFunc("GET /api/layout", s.requireAuth(s.handleGetLayout))
+	mux.HandleFunc("PUT /api/layout", s.requireAuth(s.handleSetLayout))
+
 	// grants
 	mux.HandleFunc("PUT /api/clients/{id}/grants/{nodeId}", s.requireAuth(s.handleGrant))
 	mux.HandleFunc("DELETE /api/clients/{id}/grants/{nodeId}", s.requireAuth(s.handleRevoke))

@@ -89,6 +89,10 @@ export const api = {
     req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}/rules`, rules),
 
   // config endpoints return text/plain; consumed directly as URLs for download.
+  getLayout: () => req<Record<string, { x: number; y: number }>>("GET", "/api/layout"),
+  setLayout: (positions: Record<string, { x: number; y: number }>) =>
+    req<void>("PUT", "/api/layout", positions),
+
   clientConfigUrl: (id: string) => `/api/clients/${id}/config`,
   clientVPNLinkUrl: (id: string) => `/api/clients/${id}/vpnlink`,
   nodeConfigUrl: (id: string) => `/api/nodes/${id}/config`,
