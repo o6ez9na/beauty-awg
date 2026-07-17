@@ -20,6 +20,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { api, Node as VpnNode, Client } from "../lib/api";
 import RulesModal from "./RulesModal";
+import ClientDetails from "./ClientDetails";
+import RenameModal from "./RenameModal";
+import { configChanged } from "../lib/toast";
 
 const cid = (id: string) => `c:${id}`;
 const nid = (id: string) => `n:${id}`;
@@ -69,6 +72,8 @@ export default function AccessGraph({
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<RFNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RFEdge>([]);
   const [editing, setEditing] = useState<{ clientId: string; nodeId: string } | null>(null);
+  const [detailsClientId, setDetailsClientId] = useState<string | null>(null);
+  const [renamingNode, setRenamingNode] = useState<{ id: string; name: string } | null>(null);
   const [ready, setReady] = useState(false);
 
   // saved positions from the DB — the source of truth for reloads
@@ -144,26 +149,34 @@ export default function AccessGraph({
       const clientId = unwrap(conn.source);
       const nodeId = unwrap(conn.target);
       setEdges((eds) => addEdge({ ...conn, id: `${clientId}=>${nodeId}`, animated: true }, eds));
-      try { await api.grant(clientId, nodeId); onChanged(); }
+      try {
+        await api.grant(clientId, nodeId);
+        configChanged(clients.find((c) => c.id === clientId)?.name ?? "client");
+        onChanged();
+      }
       catch (e) { onError?.("Couldn't grant access: " + String(e)); onChanged(); }
     },
-    [setEdges, onChanged, onError]
+    [setEdges, onChanged, onError, clients]
   );
 
   const onEdgesDelete = useCallback(
     async (removed: RFEdge[]) => {
       for (const e of removed) {
         const [clientId, nodeId] = e.id.split("=>");
-        try { await api.revoke(clientId, nodeId); }
+        try {
+          await api.revoke(clientId, nodeId);
+          configChanged(clients.find((c) => c.id === clientId)?.name ?? "client");
+        }
         catch (err) { onError?.("Couldn't revoke access: " + String(err)); }
       }
       onChanged();
     },
-    [onChanged, onError]
+    [onChanged, onError, clients]
   );
 
   const editServer = editing ? servers.find((s) => s.id === editing.nodeId) : null;
   const editClient = editing ? clients.find((c) => c.id === editing.clientId) : null;
+  const detailsClient = detailsClientId ? clients.find((c) => c.id === detailsClientId) : null;
 
   return (
     <>
@@ -175,6 +188,14 @@ export default function AccessGraph({
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
         onNodeDragStop={() => setRfNodes((prev) => { persist(prev); return prev; })}
+        onNodeClick={(_, node) => {
+          if (node.id.startsWith("c:")) {
+            setDetailsClientId(unwrap(node.id));
+          } else if (node.id.startsWith("n:")) {
+            const s = servers.find((x) => x.id === unwrap(node.id));
+            if (s && !s.is_hub) setRenamingNode({ id: s.id, name: s.name });
+          }
+        }}
         onEdgeClick={(_, edge) => {
           const [clientId, nodeId] = edge.id.split("=>");
           setEditing({ clientId, nodeId });
@@ -201,11 +222,45 @@ export default function AccessGraph({
           nodeName={editServer.name}
           subnetHints={editServer.subnets}
           onRevoke={async () => {
-            try { await api.revoke(editing.clientId, editing.nodeId); } catch { /* surfaced by reload */ }
+            try {
+              await api.revoke(editing.clientId, editing.nodeId);
+              configChanged(editClient.name);
+            } catch { /* surfaced by reload */ }
             setEditing(null);
             onChanged();
           }}
           onClose={() => { setEditing(null); onChanged(); }}
+        />
+      )}
+
+      {detailsClient && (
+        <ClientDetails
+          client={detailsClient}
+          onRename={async (name) => {
+            try { await api.renameClient(detailsClient.id, name); }
+            catch (e) { onError?.("Couldn't rename: " + String(e)); }
+            onChanged();
+          }}
+          onDelete={async () => {
+            try { await api.deleteClient(detailsClient.id); }
+            catch (e) { onError?.("Couldn't delete: " + String(e)); }
+            setDetailsClientId(null);
+            onChanged();
+          }}
+          onClose={() => setDetailsClientId(null)}
+        />
+      )}
+
+      {renamingNode && (
+        <RenameModal
+          title="Rename node"
+          current={renamingNode.name}
+          onSave={async (name) => {
+            try { await api.renameNode(renamingNode.id, name); }
+            catch (e) { onError?.("Couldn't rename: " + String(e)); }
+            onChanged();
+          }}
+          onClose={() => setRenamingNode(null)}
         />
       )}
     </>

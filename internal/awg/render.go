@@ -20,6 +20,15 @@ func paramsBlock(p ObfuscationParams) string {
 func RenderHub(hub Hub, nodes []Node, clients []Client, grants []Grant) string {
 	var b strings.Builder
 
+	// Nodes acting as an internet exit: their hub peer must accept the whole
+	// 0.0.0.0/0 crypto route so client internet can be sent into their tunnel.
+	exitNode := map[string]bool{}
+	for _, g := range grants {
+		if g.NodeExit {
+			exitNode[g.NodeAddr.String()] = true
+		}
+	}
+
 	fmt.Fprintf(&b, "[Interface]\n")
 	// Mask = pool bits so the hub gets an on-link route to the whole pool.
 	fmt.Fprintf(&b, "Address = %s/%d\n", hub.Address.String(), hub.PoolCIDR.Bits())
@@ -34,6 +43,9 @@ func RenderHub(hub Hub, nodes []Node, clients []Client, grants []Grant) string {
 		allowed := []string{n.Address.String() + "/32"}
 		for _, s := range n.Subnets {
 			allowed = append(allowed, s.String())
+		}
+		if exitNode[n.Address.String()] {
+			allowed = append(allowed, "0.0.0.0/0")
 		}
 		fmt.Fprintf(&b, "\n# node: %s\n[Peer]\n", n.Name)
 		fmt.Fprintf(&b, "PublicKey = %s\n", n.Keys.Public)
@@ -109,6 +121,10 @@ func RenderClient(hub Hub, c Client, granted []Grant) string {
 	// include the hub tunnel IP for DNS/reachability.
 	allowed := []string{hub.Address.String() + "/32"}
 	for _, g := range granted {
+		if g.NodeExit {
+			// full internet out this node => the whole default route to the tunnel.
+			allowed = append(allowed, "0.0.0.0/0")
+		}
 		for _, d := range g.dests() {
 			allowed = append(allowed, d.String())
 		}

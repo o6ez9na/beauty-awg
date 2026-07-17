@@ -193,7 +193,7 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 
 	// grants for enabled clients only
 	grows, err := s.Pool.Query(ctx, `
-		SELECT g.client_id, g.node_id
+		SELECT g.client_id, g.node_id, g.exit
 		FROM grants g JOIN clients c ON c.id = g.client_id
 		WHERE c.enabled = true`)
 	if err != nil {
@@ -203,7 +203,8 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 	var grants []awg.Grant
 	for grows.Next() {
 		var cid, nid uuid.UUID
-		if err := grows.Scan(&cid, &nid); err != nil {
+		var exit bool
+		if err := grows.Scan(&cid, &nid, &exit); err != nil {
 			return awg.Hub{}, nil, nil, nil, err
 		}
 		caddr, ok := clientAddrByID[cid]
@@ -217,6 +218,7 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 			Subnets:    node.Subnets,
 			Rules:      rulesByGrant[grantKey(cid, nid)],
 			IsExit:     node.IsHub,
+			NodeExit:   exit && !node.IsHub,
 			NodeDNS:    node.DNS,
 		})
 	}

@@ -104,3 +104,47 @@ func (a Applier) EnsureRoutes(subnets []netip.Prefix) error {
 	}
 	return nil
 }
+
+// exitTable + exitPref are the dedicated policy-routing table and rule priority
+// used to send a node-exit client's whole default route into the awg interface
+// (so it reaches the exit node), without touching the hub's own default route.
+const (
+	exitTable = "51"
+	exitPref  = "5100"
+)
+
+// EnsureExitClients makes each given client tunnel IP policy-route its whole
+// traffic into the awg interface (table 51 default => dev awg0). The awg
+// cryptokey map then sends internet-bound packets to the exit node (whose hub
+// peer AllowedIPs includes 0.0.0.0/0). Rules at exitPref are flushed and rebuilt
+// each call, so removing a client's exit cleans up. The local table (pref 0)
+// still handles the hub's own addresses first, so the resolver keeps working.
+func (a Applier) EnsureExitClients(clients []netip.Addr) error {
+	if a.DryRun {
+		fmt.Printf("ip route replace default dev %s table %s\n", a.Iface, exitTable)
+		fmt.Printf("flush ip rules pref %s\n", exitPref)
+		for _, c := range clients {
+			fmt.Printf("ip rule add from %s/32 lookup %s pref %s\n", c.String(), exitTable, exitPref)
+		}
+		return nil
+	}
+
+	// Default route for the exit table. Idempotent.
+	if out, err := exec.Command("ip", "route", "replace", "default", "dev", a.Iface, "table", exitTable).CombinedOutput(); err != nil {
+		return fmt.Errorf("ip route replace default table %s: %w: %s", exitTable, err, out)
+	}
+
+	// Flush our source rules (ip rule has no "replace"), then re-add the current
+	// set. Deleting by pref removes one match at a time; loop until none remain.
+	for {
+		if err := exec.Command("ip", "rule", "del", "pref", exitPref).Run(); err != nil {
+			break
+		}
+	}
+	for _, c := range clients {
+		if out, err := exec.Command("ip", "rule", "add", "from", c.String()+"/32", "lookup", exitTable, "pref", exitPref).CombinedOutput(); err != nil {
+			return fmt.Errorf("ip rule add from %s: %w: %s", c, err, out)
+		}
+	}
+	return nil
+}

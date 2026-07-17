@@ -49,6 +49,18 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
+	// Policy-route node-exit clients' whole traffic into the tunnel so it egresses
+	// via the exit node's home internet instead of the hub's WAN.
+	var exitClients []netip.Addr
+	for _, g := range grants {
+		if g.NodeExit {
+			exitClients = append(exitClients, g.ClientAddr)
+		}
+	}
+	if err := s.Applier.EnsureExitClients(exitClients); err != nil {
+		return err
+	}
+
 	// Rebuild the split-horizon resolver's domain->node-DNS map.
 	if s.Resolver != nil {
 		dr, err := s.St.DomainRoutes(ctx)

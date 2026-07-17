@@ -29,6 +29,13 @@ func RenderNFT(hub Hub, grants []Grant) string {
 			fmt.Fprintf(&b, "    ip saddr %s oifname %q accept\n", g.ClientAddr.String(), hub.WANIface)
 			continue
 		}
+		if g.NodeExit {
+			// full internet via this node: the client's default route is policy-
+			// routed into awg0, so accept all its forwarded traffic (which egresses
+			// awg0 toward the exit node; the node then masquerades to its home WAN).
+			fmt.Fprintf(&b, "    ip saddr %s accept\n", g.ClientAddr.String())
+			continue
+		}
 		if len(g.Rules) == 0 {
 			// no access level => full access to every node subnet
 			for _, s := range g.Subnets {
