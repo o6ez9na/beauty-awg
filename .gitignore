@@ -13,3 +13,4 @@ web/out
 
 # editor
 .DS_Store
+.claude

@@ -27,10 +27,11 @@ export default function LoginPage() {
 
   return (
     <div className="login-wrap">
-      <form className="card login-card" onSubmit={submit}>
-        <div className="brand" style={{ marginBottom: 18 }}>
-          beautiful<span style={{ color: "var(--accent)" }}>wg</span>
+      <form className="login-card" onSubmit={submit}>
+        <div className="brand" style={{ marginBottom: 6 }}>
+          beautiful<b style={{ color: "var(--signal)" }}>wg</b>
         </div>
+        <p className="eyebrow">Sign in to the mesh</p>
         <div className="field" style={{ marginBottom: 12 }}>
           <label>Username</label>
           <input
@@ -50,8 +51,8 @@ export default function LoginPage() {
           />
         </div>
         {err && <div className="error">{err}</div>}
-        <button type="submit" disabled={busy} style={{ width: "100%" }}>
-          {busy ? "…" : "Sign in"}
+        <button type="submit" className="btn" disabled={busy} style={{ width: "100%" }}>
+          {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
     </div>
