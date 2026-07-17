@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -15,6 +15,7 @@ import {
   type Edge as RFEdge,
   type Connection,
   type NodeProps,
+  type XYPosition,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { api, Node as VpnNode, Client } from "../lib/api";
@@ -24,20 +25,10 @@ const cid = (id: string) => `c:${id}`;
 const nid = (id: string) => `n:${id}`;
 const unwrap = (rfId: string) => rfId.slice(2);
 
-// Node positions persist per-browser so a hand-arranged graph survives reloads.
-const POS_KEY = "bwg.graph.positions";
-type PosMap = Record<string, { x: number; y: number }>;
-function loadPos(): PosMap {
-  try { return JSON.parse(localStorage.getItem(POS_KEY) || "{}"); } catch { return {}; }
-}
-function savePos(nodes: RFNode[]) {
-  const m: PosMap = {};
-  for (const n of nodes) m[n.id] = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
-  try { localStorage.setItem(POS_KEY, JSON.stringify(m)); } catch { /* ignore */ }
-}
+type PosMap = Record<string, XYPosition>;
 
 function Dot({ online }: { online?: boolean }) {
-  return <span className={"dot " + (online ? "live" : "stale")} style={{ marginRight: 7 }} />;
+  return <span className={"dot " + (online ? "live" : "")} style={{ marginRight: 7 }} />;
 }
 
 function ClientNodeView({ data }: NodeProps) {
@@ -78,37 +69,52 @@ export default function AccessGraph({
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<RFNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RFEdge>([]);
   const [editing, setEditing] = useState<{ clientId: string; nodeId: string } | null>(null);
+  const [ready, setReady] = useState(false);
+
+  // saved positions from the DB — the source of truth for reloads
+  const layout = useRef<PosMap>({});
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const nodeTypes = useMemo(() => ({ client: ClientNodeView, server: ServerNodeView }), []);
   const servers = useMemo(() => vpnNodes.filter((n) => n.status === "active"), [vpnNodes]);
 
-  // Rebuild the graph from data, but keep any position the user has set (saved
-  // in localStorage), so dragging is preserved across refreshes and reloads.
+  // Load saved layout once before laying anything out.
   useEffect(() => {
-    const saved = loadPos();
+    api.getLayout().then((m) => { layout.current = m || {}; }).catch(() => {}).finally(() => setReady(true));
+  }, []);
+
+  // Reconcile the graph from data WITHOUT resetting positions: keep the position
+  // a node already has this session (prev), else the DB layout, else a default.
+  useEffect(() => {
+    if (!ready) return;
     let cn = 0, sn = 0;
-    const built: RFNode[] = [
-      ...clients.map((c) => {
-        const id = cid(c.id);
-        return {
-          id, type: "client",
-          position: saved[id] ?? { x: 20, y: 24 + cn++ * 96 },
-          data: { label: c.name, sub: c.address, sel: c.id === selectedClientId, online: c.online },
-        };
-      }),
-      ...servers.map((n) => {
-        const id = nid(n.id);
-        return {
-          id, type: "server",
-          position: saved[id] ?? { x: 380, y: 24 + sn++ * 96 },
-          data: {
-            label: n.is_hub ? "internet exit" : n.name,
-            sub: n.is_hub ? "via panel · 0.0.0.0/0" : n.subnets.join(", "),
-            hub: n.is_hub, online: n.online,
-          },
-        };
-      }),
-    ];
+    setRfNodes((prev) => {
+      const prevPos = new Map(prev.map((n) => [n.id, n.position]));
+      const pos = (id: string, def: XYPosition) => prevPos.get(id) ?? layout.current[id] ?? def;
+      return [
+        ...clients.map((c) => {
+          const id = cid(c.id);
+          return {
+            id, type: "client",
+            position: pos(id, { x: 20, y: 24 + cn++ * 96 }),
+            data: { label: c.name, sub: c.address, sel: c.id === selectedClientId, online: c.online },
+          } as RFNode;
+        }),
+        ...servers.map((n) => {
+          const id = nid(n.id);
+          return {
+            id, type: "server",
+            position: pos(id, { x: 380, y: 24 + sn++ * 96 }),
+            data: {
+              label: n.is_hub ? "internet exit" : n.name,
+              sub: n.is_hub ? "via panel · 0.0.0.0/0" : n.subnets.join(", "),
+              hub: n.is_hub, online: n.online,
+            },
+          } as RFNode;
+        }),
+      ];
+    });
+
     const built_edges: RFEdge[] = [];
     for (const c of clients) {
       for (const g of c.granted_nodes) {
@@ -117,9 +123,17 @@ export default function AccessGraph({
         }
       }
     }
-    setRfNodes(built);
     setEdges(built_edges);
-  }, [clients, servers, selectedClientId, setRfNodes, setEdges]);
+  }, [clients, servers, selectedClientId, ready, setRfNodes, setEdges]);
+
+  // Persist positions (debounced) when the user finishes dragging.
+  const persist = useCallback((nodes: RFNode[]) => {
+    const m: PosMap = {};
+    for (const n of nodes) m[n.id] = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
+    layout.current = m;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { api.setLayout(m).catch(() => {}); }, 400);
+  }, []);
 
   const onConnect = useCallback(
     async (conn: Connection) => {
@@ -160,7 +174,7 @@ export default function AccessGraph({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
-        onNodeDragStop={(_, __, all) => savePos(all as RFNode[])}
+        onNodeDragStop={() => setRfNodes((prev) => { persist(prev); return prev; })}
         onEdgeClick={(_, edge) => {
           const [clientId, nodeId] = edge.id.split("=>");
           setEditing({ clientId, nodeId });

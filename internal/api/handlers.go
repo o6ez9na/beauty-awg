@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/netip"
 	"time"
@@ -251,6 +253,35 @@ func (s *Server) handleClientVPNLink(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(awg.RenderVPNLink(hub, client, grants)))
+}
+
+// --- graph layout ---
+
+func (s *Server) handleGetLayout(w http.ResponseWriter, r *http.Request) {
+	positions, err := s.St.GetGraphLayout(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(positions))
+}
+
+func (s *Server) handleSetLayout(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !json.Valid(body) {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.St.SetGraphLayout(r.Context(), string(body)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- grants ---
