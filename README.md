@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/ins
 Non-interactive:
 
 ```bash
-curl -fsSL .../install.sh | sudo bash -s -- panel   # or: node
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/install.sh | sudo bash -s -- panel   # or: node
 ```
 
 - **panel** installs AmneziaWG (module+tools), Docker, clones the repo to
@@ -55,6 +55,40 @@ Removes only beautifulwg's own bits and leaves shared things (Docker, the Amnezi
 kernel module) alone. Flags: `PURGE_DATA=1` also deletes the DB volume / repo / node
 keypair; `PURGE_AWG=1` also removes the kernel module (+ tools on a node); `FORCE=1`
 skips the confirmation.
+
+## Running the panel inside an LXC container
+
+If the panel runs in an **LXC container** (Proxmox or plain LXC), `awg-quick`/
+`amneziawg-go` fails with `/dev/net/tun does not exist` — the container has no TUN
+device. This is required even for the userspace (`amneziawg-go`) path; userspace
+only avoids the kernel module, not TUN.
+
+Run this **on the LXC host** (not inside the container), as root. It bind-mounts
+`/dev/net/tun` into the container, restarts it, and verifies:
+
+```bash
+# privileged container — simple run (asks for CTID if omitted):
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/enable-tun-lxc.sh | sudo bash -s --
+```
+
+```bash
+# unprivileged container — also relax AppArmor so TUN can be created:
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/enable-tun-lxc.sh | sudo bash -s -- --apparmor=nesting
+```
+
+```bash
+# privileged container with known CTID (no prompt):
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/enable-tun-lxc.sh | sudo bash -s -- <CTID>
+```
+
+Replace `<CTID>` with your container ID (`pct list` / `lxc-ls -f`).
+
+Flags: `--no-restart` (edit config only), `--docker` (print the TUN/`NET_ADMIN`
+snippet for Docker running *inside* the LXC), `--apparmor=nesting|unconfined`
+(unprivileged only; `nesting` keeps most confinement, `unconfined` removes
+AppArmor entirely — less isolation). Without a flag the script never touches
+AppArmor. It auto-detects Proxmox vs plain LXC, cgroup v1/v2, and privileged vs
+unprivileged, and backs up the container config before editing.
 
 ## Host prerequisites (VPS hub)
 
