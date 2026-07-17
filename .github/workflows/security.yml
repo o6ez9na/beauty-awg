@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload OSV reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: osv-scanner-reports
           path: |
@@ -157,7 +157,7 @@ jobs:
         run: npm audit --json > npm-audit.json 2>/dev/null || true
       - name: Upload npm audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-audit-report
           path: ${{ needs.detect.outputs.js_dir }}/npm-audit.json
@@ -206,7 +206,7 @@ jobs:
         run: govulncheck -format sarif ./... > govulncheck.sarif 2>/dev/null || true
       - name: Upload govulncheck report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: govulncheck-report
           path: |
@@ -252,7 +252,7 @@ jobs:
           category: semgrep
       - name: Upload Semgrep report
         if: always() && hashFiles('semgrep.sarif') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-report
           path: semgrep.sarif
@@ -283,7 +283,7 @@ jobs:
           category: gosec
       - name: Upload gosec report
         if: always() && hashFiles('gosec.sarif') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gosec-report
           path: gosec.sarif
@@ -332,7 +332,7 @@ jobs:
           category: gitleaks
       - name: Upload gitleaks report
         if: always() && hashFiles('gitleaks.sarif') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gitleaks-report
           path: gitleaks.sarif
@@ -370,7 +370,7 @@ jobs:
             --ref "${{ github.ref_name }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
       - name: Upload combined report (single artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: security-report
           path: security-report.html
