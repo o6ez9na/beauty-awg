@@ -28,6 +28,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -72,6 +73,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      network: host
       args:
         # Baked into next rewrites at build time (see web/Dockerfile).
         BACKEND_URL: http://localhost:8080
