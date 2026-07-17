@@ -23,9 +23,11 @@ type NodeDTO struct {
 	Status   string     `json:"status"`
 	Hostname string     `json:"hostname"`
 	LastSeen *time.Time `json:"last_seen"`
-	IsHub    bool       `json:"is_hub"`
-	DNS      string     `json:"dns"`
-	Domains  []string   `json:"domains"`
+	IsHub     bool       `json:"is_hub"`
+	DNS       string     `json:"dns"`
+	Domains   []string   `json:"domains"`
+	Online    bool       `json:"online"`
+	PublicKey string     `json:"-"`
 }
 
 type ClientDTO struct {
@@ -35,6 +37,8 @@ type ClientDTO struct {
 	DNS          string      `json:"dns"`
 	Enabled      bool        `json:"enabled"`
 	GrantedNodes []uuid.UUID `json:"granted_nodes"`
+	Online       bool        `json:"online"`
+	PublicKey    string      `json:"-"`
 }
 
 func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
@@ -42,7 +46,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 		SELECT n.id, n.name, COALESCE(host(n.address), ''), n.lan_iface,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
 		       n.status, n.hostname, n.last_seen, n.is_hub, n.dns,
-		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id), n.public_key
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		GROUP BY n.id ORDER BY n.is_hub DESC, n.status, n.address NULLS FIRST, n.name`)
@@ -54,7 +58,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	for rows.Next() {
 		var d NodeDTO
 		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets,
-			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains); err != nil {
+			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains, &d.PublicKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -65,7 +69,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT c.id, c.name, host(c.address), c.dns, c.enabled,
-		       COALESCE(array_agg(g.node_id) FILTER (WHERE g.node_id IS NOT NULL), '{}')
+		       COALESCE(array_agg(g.node_id) FILTER (WHERE g.node_id IS NOT NULL), '{}'), c.public_key
 		FROM clients c
 		LEFT JOIN grants g ON g.client_id = c.id
 		GROUP BY c.id ORDER BY c.address`)
@@ -76,7 +80,7 @@ func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 	var out []ClientDTO
 	for rows.Next() {
 		var d ClientDTO
-		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.DNS, &d.Enabled, &d.GrantedNodes); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.DNS, &d.Enabled, &d.GrantedNodes, &d.PublicKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -103,7 +107,10 @@ func (s *Store) SetNodeDomains(ctx context.Context, id uuid.UUID, domains []stri
 		}
 		for _, d := range domains {
 			d = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(d, ".")))
-			if d == "" {
+			// Accept wildcard syntax like "*.greeneye.top" — the resolver matches
+			// by suffix, so strip a leading "*." (or bare "*.") to the zone.
+			d = strings.TrimPrefix(d, "*.")
+			if d == "" || d == "*" {
 				continue
 			}
 			if _, err := tx.Exec(ctx,
@@ -196,7 +203,8 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 
 	rows, err := s.Pool.Query(ctx, `
 		SELECT n.id, host(n.address), n.dns,
-		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}')
+		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
 		FROM grants g
 		JOIN nodes n ON n.id = g.node_id
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
@@ -214,11 +222,11 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	for rows.Next() {
 		var nodeID uuid.UUID
 		var naddr, ndns string
-		var subnets []string
-		if err := rows.Scan(&nodeID, &naddr, &ndns, &subnets); err != nil {
+		var subnets, domains []string
+		if err := rows.Scan(&nodeID, &naddr, &ndns, &subnets, &domains); err != nil {
 			return awg.Hub{}, awg.Client{}, nil, err
 		}
-		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns}
+		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns, Domains: domains}
 		g.NodeAddr, _ = netip.ParseAddr(naddr)
 		for _, sn := range subnets {
 			if p, e := netip.ParsePrefix(sn); e == nil {

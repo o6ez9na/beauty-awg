@@ -47,6 +47,7 @@ type Grant struct {
 	Rules      []GrantRule    // access level; empty = full access to Subnets
 	IsExit     bool           // grant to the hub node => internet full-tunnel
 	NodeDNS    string         // node's DNS server; if set, DNAT this client's :53 here
+	Domains    []string       // node's local domains (client-side split-DNS search domains)
 }
 
 // GrantRule restricts access to a destination + optional proto/port range.
