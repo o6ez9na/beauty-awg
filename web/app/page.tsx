@@ -28,7 +28,12 @@ export default function Dashboard() {
     }
   }, [router]);
 
-  useEffect(() => { load(); }, [load]);
+  // Poll so new enrollment requests and online/offline changes show up live.
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [load]);
 
   async function guard(fn: () => Promise<void>) {
     setErr("");
@@ -139,7 +144,7 @@ function ClientsTab({
             onClick={() => onSelect(c.id === selected ? null : c.id)}
           >
             <div className="item-head">
-              <span className={"dot " + (c.enabled ? "live" : "stale")} />
+              <span className={"dot " + (c.online ? "live" : "")} title={c.online ? "online" : "offline"} />
               <span className="item-name">{c.name}</span>
               <span className="item-ip">{c.address}</span>
             </div>
@@ -242,6 +247,7 @@ function NodesTab({
         {active.map((n) => (
           <div key={n.id} className={"item" + (n.is_hub ? " exit" : "")}>
             <div className="item-head">
+              {!n.is_hub && <span className={"dot " + (n.online ? "live" : "")} title={n.online ? "online" : "offline"} />}
               <span className="item-name">{n.is_hub ? "◍ internet exit" : n.name}</span>
               <span className="item-ip">{n.address}</span>
             </div>

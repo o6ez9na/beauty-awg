@@ -13,6 +13,7 @@ export interface Node {
   is_hub: boolean;
   dns: string;
   domains: string[];
+  online: boolean;
 }
 
 export interface Client {
@@ -22,6 +23,7 @@ export interface Client {
   dns: string;
   enabled: boolean;
   granted_nodes: string[];
+  online: boolean;
 }
 
 export interface Rule {

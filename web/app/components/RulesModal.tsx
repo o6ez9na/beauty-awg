@@ -12,6 +12,7 @@ export default function RulesModal({
   nodeName,
   subnetHints,
   onClose,
+  onRevoke,
 }: {
   clientId: string;
   nodeId: string;
@@ -19,6 +20,7 @@ export default function RulesModal({
   nodeName: string;
   subnetHints: string[];
   onClose: () => void;
+  onRevoke?: () => void;
 }) {
   const [rules, setRules] = useState<Rule[]>([]);
   const [err, setErr] = useState("");
@@ -148,6 +150,11 @@ export default function RulesModal({
           <button className="ghost" onClick={addRule}>
             + Add rule
           </button>
+          {onRevoke && (
+            <button className="danger" onClick={onRevoke}>
+              Revoke access
+            </button>
+          )}
           <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <button className="ghost" onClick={onClose}>
               Cancel
