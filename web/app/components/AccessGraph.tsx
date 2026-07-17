@@ -24,11 +24,27 @@ const cid = (id: string) => `c:${id}`;
 const nid = (id: string) => `n:${id}`;
 const unwrap = (rfId: string) => rfId.slice(2);
 
+// Node positions persist per-browser so a hand-arranged graph survives reloads.
+const POS_KEY = "bwg.graph.positions";
+type PosMap = Record<string, { x: number; y: number }>;
+function loadPos(): PosMap {
+  try { return JSON.parse(localStorage.getItem(POS_KEY) || "{}"); } catch { return {}; }
+}
+function savePos(nodes: RFNode[]) {
+  const m: PosMap = {};
+  for (const n of nodes) m[n.id] = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
+  try { localStorage.setItem(POS_KEY, JSON.stringify(m)); } catch { /* ignore */ }
+}
+
+function Dot({ online }: { online?: boolean }) {
+  return <span className={"dot " + (online ? "live" : "stale")} style={{ marginRight: 7 }} />;
+}
+
 function ClientNodeView({ data }: NodeProps) {
-  const d = data as { label: string; sub: string; sel?: boolean };
+  const d = data as { label: string; sub: string; sel?: boolean; online?: boolean };
   return (
     <div className={"gnode gnode-client" + (d.sel ? " sel" : "")}>
-      <div className="gnode-title">{d.label}</div>
+      <div className="gnode-title"><Dot online={d.online} />{d.label}</div>
       <div className="gnode-sub">{d.sub}</div>
       <Handle type="source" position={Position.Right} />
     </div>
@@ -36,18 +52,16 @@ function ClientNodeView({ data }: NodeProps) {
 }
 
 function ServerNodeView({ data }: NodeProps) {
-  const d = data as { label: string; sub: string; hub?: boolean };
+  const d = data as { label: string; sub: string; hub?: boolean; online?: boolean };
   return (
     <div className={"gnode " + (d.hub ? "gnode-hub" : "gnode-server")}>
       <Handle type="target" position={Position.Left} />
-      <div className="gnode-title">{d.hub ? "◍ " : ""}{d.label}</div>
+      <div className="gnode-title">{d.hub ? "◍ " : <Dot online={d.online} />}{d.label}</div>
       <div className="gnode-sub">{d.sub}</div>
     </div>
   );
 }
 
-// AccessGraph draws clients (left) → nodes / internet-exit (right). Drag an
-// arrow to grant, select + Delete to revoke, click an arrow to set its level.
 export default function AccessGraph({
   nodes: vpnNodes,
   clients,
@@ -68,35 +82,38 @@ export default function AccessGraph({
   const nodeTypes = useMemo(() => ({ client: ClientNodeView, server: ServerNodeView }), []);
   const servers = useMemo(() => vpnNodes.filter((n) => n.status === "active"), [vpnNodes]);
 
+  // Rebuild the graph from data, but keep any position the user has set (saved
+  // in localStorage), so dragging is preserved across refreshes and reloads.
   useEffect(() => {
+    const saved = loadPos();
+    let cn = 0, sn = 0;
     const built: RFNode[] = [
-      ...clients.map((c, i) => ({
-        id: cid(c.id),
-        type: "client",
-        position: { x: 20, y: 24 + i * 96 },
-        data: { label: c.name, sub: c.address, sel: c.id === selectedClientId },
-      })),
-      ...servers.map((n, i) => ({
-        id: nid(n.id),
-        type: "server",
-        position: { x: 380, y: 24 + i * 96 },
-        data: {
-          label: n.is_hub ? "internet exit" : n.name,
-          sub: n.is_hub ? "via panel · 0.0.0.0/0" : n.subnets.join(", "),
-          hub: n.is_hub,
-        },
-      })),
+      ...clients.map((c) => {
+        const id = cid(c.id);
+        return {
+          id, type: "client",
+          position: saved[id] ?? { x: 20, y: 24 + cn++ * 96 },
+          data: { label: c.name, sub: c.address, sel: c.id === selectedClientId, online: c.online },
+        };
+      }),
+      ...servers.map((n) => {
+        const id = nid(n.id);
+        return {
+          id, type: "server",
+          position: saved[id] ?? { x: 380, y: 24 + sn++ * 96 },
+          data: {
+            label: n.is_hub ? "internet exit" : n.name,
+            sub: n.is_hub ? "via panel · 0.0.0.0/0" : n.subnets.join(", "),
+            hub: n.is_hub, online: n.online,
+          },
+        };
+      }),
     ];
     const built_edges: RFEdge[] = [];
     for (const c of clients) {
       for (const g of c.granted_nodes) {
         if (servers.some((s) => s.id === g)) {
-          built_edges.push({
-            id: `${c.id}=>${g}`,
-            source: cid(c.id),
-            target: nid(g),
-            animated: true,
-          });
+          built_edges.push({ id: `${c.id}=>${g}`, source: cid(c.id), target: nid(g), animated: true });
         }
       }
     }
@@ -113,13 +130,8 @@ export default function AccessGraph({
       const clientId = unwrap(conn.source);
       const nodeId = unwrap(conn.target);
       setEdges((eds) => addEdge({ ...conn, id: `${clientId}=>${nodeId}`, animated: true }, eds));
-      try {
-        await api.grant(clientId, nodeId);
-        onChanged();
-      } catch (e) {
-        onError?.("Couldn't grant access: " + String(e));
-        onChanged();
-      }
+      try { await api.grant(clientId, nodeId); onChanged(); }
+      catch (e) { onError?.("Couldn't grant access: " + String(e)); onChanged(); }
     },
     [setEdges, onChanged, onError]
   );
@@ -128,11 +140,8 @@ export default function AccessGraph({
     async (removed: RFEdge[]) => {
       for (const e of removed) {
         const [clientId, nodeId] = e.id.split("=>");
-        try {
-          await api.revoke(clientId, nodeId);
-        } catch (err) {
-          onError?.("Couldn't revoke access: " + String(err));
-        }
+        try { await api.revoke(clientId, nodeId); }
+        catch (err) { onError?.("Couldn't revoke access: " + String(err)); }
       }
       onChanged();
     },
@@ -151,11 +160,13 @@ export default function AccessGraph({
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
+        onNodeDragStop={(_, __, all) => savePos(all as RFNode[])}
         onEdgeClick={(_, edge) => {
           const [clientId, nodeId] = edge.id.split("=>");
           setEditing({ clientId, nodeId });
         }}
         nodeTypes={nodeTypes}
+        deleteKeyCode={["Delete", "Backspace"]}
         fitView
         colorMode="dark"
         proOptions={{ hideAttribution: true }}
@@ -165,7 +176,7 @@ export default function AccessGraph({
       </ReactFlow>
 
       <div className="stage-hint">
-        drag client → node to grant · click an arrow for access level · select + Delete to revoke
+        drag client → node to grant · click an arrow to edit or revoke access
       </div>
 
       {editing && editServer && editClient && (
@@ -175,10 +186,12 @@ export default function AccessGraph({
           clientName={editClient.name}
           nodeName={editServer.name}
           subnetHints={editServer.subnets}
-          onClose={() => {
+          onRevoke={async () => {
+            try { await api.revoke(editing.clientId, editing.nodeId); } catch { /* surfaced by reload */ }
             setEditing(null);
             onChanged();
           }}
+          onClose={() => { setEditing(null); onChanged(); }}
         />
       )}
     </>

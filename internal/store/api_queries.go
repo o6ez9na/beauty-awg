@@ -23,9 +23,11 @@ type NodeDTO struct {
 	Status   string     `json:"status"`
 	Hostname string     `json:"hostname"`
 	LastSeen *time.Time `json:"last_seen"`
-	IsHub    bool       `json:"is_hub"`
-	DNS      string     `json:"dns"`
-	Domains  []string   `json:"domains"`
+	IsHub     bool       `json:"is_hub"`
+	DNS       string     `json:"dns"`
+	Domains   []string   `json:"domains"`
+	Online    bool       `json:"online"`
+	PublicKey string     `json:"-"`
 }
 
 type ClientDTO struct {
@@ -35,6 +37,8 @@ type ClientDTO struct {
 	DNS          string      `json:"dns"`
 	Enabled      bool        `json:"enabled"`
 	GrantedNodes []uuid.UUID `json:"granted_nodes"`
+	Online       bool        `json:"online"`
+	PublicKey    string      `json:"-"`
 }
 
 func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
@@ -42,7 +46,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 		SELECT n.id, n.name, COALESCE(host(n.address), ''), n.lan_iface,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
 		       n.status, n.hostname, n.last_seen, n.is_hub, n.dns,
-		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id), n.public_key
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		GROUP BY n.id ORDER BY n.is_hub DESC, n.status, n.address NULLS FIRST, n.name`)
@@ -54,7 +58,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	for rows.Next() {
 		var d NodeDTO
 		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets,
-			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains); err != nil {
+			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains, &d.PublicKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -65,7 +69,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT c.id, c.name, host(c.address), c.dns, c.enabled,
-		       COALESCE(array_agg(g.node_id) FILTER (WHERE g.node_id IS NOT NULL), '{}')
+		       COALESCE(array_agg(g.node_id) FILTER (WHERE g.node_id IS NOT NULL), '{}'), c.public_key
 		FROM clients c
 		LEFT JOIN grants g ON g.client_id = c.id
 		GROUP BY c.id ORDER BY c.address`)
@@ -76,7 +80,7 @@ func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 	var out []ClientDTO
 	for rows.Next() {
 		var d ClientDTO
-		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.DNS, &d.Enabled, &d.GrantedNodes); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.DNS, &d.Enabled, &d.GrantedNodes, &d.PublicKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/netip"
+	"time"
 
 	"beautifulwg/internal/awg"
 	"beautifulwg/internal/store"
@@ -18,7 +19,20 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	for i := range nodes {
+		nodes[i].Online = peerOnline(hs, nodes[i].PublicKey)
+	}
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// peerOnline reports whether a peer handshaked recently enough to be considered up.
+func peerOnline(hs map[string]int64, pubkey string) bool {
+	if pubkey == "" {
+		return false
+	}
+	last, ok := hs[pubkey]
+	return ok && last > 0 && time.Now().Unix()-last < 180
 }
 
 type createNodeReq struct {
@@ -128,6 +142,10 @@ func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	for i := range clients {
+		clients[i].Online = peerOnline(hs, clients[i].PublicKey)
 	}
 	writeJSON(w, http.StatusOK, clients)
 }
