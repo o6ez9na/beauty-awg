@@ -74,10 +74,18 @@ func RenderNode(hub Hub, n Node) string {
 	fmt.Fprintf(&b, "Address = %s/32\n", n.Address.String())
 	fmt.Fprintf(&b, "PrivateKey = %s\n", priv)
 	b.WriteString(paramsBlock(hub.Params))
-	// Forward + masquerade pool -> LAN. awg-quick runs PostUp/PostDown.
+	// Forward + masquerade pool -> LAN. awg-quick runs PostUp/PostDown; %i
+	// expands to the awg interface name (e.g. awg0). The explicit FORWARD
+	// accepts are required because Docker (typically present on a LAN node,
+	// since the panel runs in containers) flips the FORWARD policy to DROP,
+	// which otherwise silently blocks tunnel->LAN forwarding.
 	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.ip_forward=1\n")
 	fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n", hub.PoolCIDR.String(), n.LANIface)
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %%i -o %s -j ACCEPT\n", n.LANIface)
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %s -o %%i -j ACCEPT\n", n.LANIface)
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", hub.PoolCIDR.String(), n.LANIface)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT\n", n.LANIface)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -o %%i -j ACCEPT\n", n.LANIface)
 
 	fmt.Fprintf(&b, "\n# hub\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.Keys.Public)
