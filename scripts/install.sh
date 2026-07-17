@@ -280,6 +280,39 @@ enable_forwarding() {
   sysctl -q -w net.ipv4.ip_forward=1
 }
 
+# True when we're running inside an LXC/container (not a VM or bare metal).
+is_lxc() {
+  systemd-detect-virt -c 2>/dev/null | grep -qiE 'lxc|container' && return 0
+  grep -qa 'container=lxc' /proc/1/environ 2>/dev/null && return 0
+  [ -f /run/systemd/container ] && grep -qi lxc /run/systemd/container 2>/dev/null && return 0
+  return 1
+}
+
+# Ensure /dev/net/tun exists on this host. The backend container declares
+# `devices: /dev/net/tun` in docker-compose (and awg-quick/amneziawg-go need TUN),
+# so `docker compose up` hard-fails if the node is missing. On bare metal/VMs a
+# modprobe is enough; inside LXC the device must be passed IN FROM THE HOST.
+ensure_tun() {
+  modprobe tun 2>/dev/null || true
+  if [ ! -c /dev/net/tun ]; then
+    info "creating /dev/net/tun"
+    mkdir -p /dev/net
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+    chmod 600 /dev/net/tun 2>/dev/null || true
+  fi
+  if [ -c /dev/net/tun ]; then
+    ok "/dev/net/tun present"
+    return
+  fi
+  warn "/dev/net/tun is missing and could not be created."
+  if is_lxc; then
+    warn "this looks like an LXC container: TUN must be passed IN FROM THE HOST."
+    warn "run on the LXC host, then re-run this installer:"
+    warn "  curl -fsSL https://raw.githubusercontent.com/${REPO_SLUG}/main/scripts/enable-tun-lxc.sh | sudo bash -s -- <CTID>"
+  fi
+  warn "the backend container needs /dev/net/tun; 'docker compose up' will fail without it."
+}
+
 # --- panel install ---------------------------------------------------------
 install_docker() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -340,6 +373,7 @@ provision_panel() {
 install_panel() {
   install_awg_module
   enable_forwarding
+  ensure_tun
   install_docker
   pkg_install git
 
@@ -394,6 +428,7 @@ install_node() {
   install_awg_module
   install_awg_tools
   enable_forwarding
+  ensure_tun
   mkdir -p "$AWG_CONF_DIR"
 
   local webpw
