@@ -1,8 +1,11 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"beautifulwg/internal/awg"
 	"beautifulwg/internal/store"
@@ -18,7 +21,20 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	for i := range nodes {
+		nodes[i].Online = peerOnline(hs, nodes[i].PublicKey)
+	}
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// peerOnline reports whether a peer handshaked recently enough to be considered up.
+func peerOnline(hs map[string]int64, pubkey string) bool {
+	if pubkey == "" {
+		return false
+	}
+	last, ok := hs[pubkey]
+	return ok && last > 0 && time.Now().Unix()-last < 180
 }
 
 type createNodeReq struct {
@@ -129,6 +145,10 @@ func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	for i := range clients {
+		clients[i].Online = peerOnline(hs, clients[i].PublicKey)
+	}
 	writeJSON(w, http.StatusOK, clients)
 }
 
@@ -151,8 +171,10 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	psk, _ := awg.GeneratePresharedKey()
-	id, addr, err := s.St.CreateClient(r.Context(), req.Name, req.DNS, keys, psk)
+	// No PSK for clients: the AmneziaVPN "vpn://" format has no PSK field, so the
+	// app connects without it — a PSK would break those clients. (.conf clients
+	// work fine without it.)
+	id, addr, err := s.St.CreateClient(r.Context(), req.Name, req.DNS, keys, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -216,6 +238,50 @@ func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeConf(w, client.Name, awg.RenderClient(hub, client, grants))
+}
+
+// handleClientVPNLink returns the native AmneziaVPN "vpn://" import link.
+func (s *Server) handleClientVPNLink(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	hub, client, grants, err := s.St.GetClientForExport(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(awg.RenderVPNLink(hub, client, grants)))
+}
+
+// --- graph layout ---
+
+func (s *Server) handleGetLayout(w http.ResponseWriter, r *http.Request) {
+	positions, err := s.St.GetGraphLayout(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(positions))
+}
+
+func (s *Server) handleSetLayout(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !json.Valid(body) {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := s.St.SetGraphLayout(r.Context(), string(body)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- grants ---
