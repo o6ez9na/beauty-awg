@@ -56,6 +56,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/clients/{id}/grants/{nodeId}/rules", s.requireAuth(s.handleGetGrantRules))
 	mux.HandleFunc("PUT /api/clients/{id}/grants/{nodeId}/rules", s.requireAuth(s.handleSetGrantRules))
 
+	// grant internet-exit (route the client's whole traffic out this node's WAN)
+	mux.HandleFunc("GET /api/clients/{id}/grants/{nodeId}/exit", s.requireAuth(s.handleGetGrantExit))
+	mux.HandleFunc("PUT /api/clients/{id}/grants/{nodeId}/exit", s.requireAuth(s.handleSetGrantExit))
+
 	return mux
 }
 

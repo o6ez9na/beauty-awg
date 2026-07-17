@@ -45,7 +45,8 @@ type Grant struct {
 	NodeAddr   netip.Addr
 	Subnets    []netip.Prefix // the node's full subnets
 	Rules      []GrantRule    // access level; empty = full access to Subnets
-	IsExit     bool           // grant to the hub node => internet full-tunnel
+	IsExit     bool           // grant to the hub node => internet full-tunnel via hub
+	NodeExit   bool           // route this client's whole internet out THIS node's WAN
 	NodeDNS    string         // node's DNS server; if set, DNAT this client's :53 here
 	Domains    []string       // node's local domains (client-side split-DNS search domains)
 }

@@ -68,6 +68,8 @@ export const api = {
   deleteNode: (id: string) => req<void>("DELETE", `/api/nodes/${id}`),
   updateNode: (id: string, dns: string, domains: string[]) =>
     req<void>("PATCH", `/api/nodes/${id}`, { dns, domains }),
+  renameNode: (id: string, name: string) =>
+    req<void>("PATCH", `/api/nodes/${id}`, { name }),
   approveNode: (id: string) => req<void>("POST", `/api/nodes/${id}/approve`),
   rejectNode: (id: string) => req<void>("POST", `/api/nodes/${id}/reject`),
 
@@ -76,6 +78,8 @@ export const api = {
     req<{ id: string; address: string }>("POST", "/api/clients", { name, dns }),
   updateClient: (id: string, enabled: boolean, dns: string) =>
     req<void>("PATCH", `/api/clients/${id}`, { enabled, dns }),
+  renameClient: (id: string, name: string) =>
+    req<void>("PATCH", `/api/clients/${id}`, { name }),
   deleteClient: (id: string) => req<void>("DELETE", `/api/clients/${id}`),
 
   grant: (clientId: string, nodeId: string) =>
@@ -87,6 +91,11 @@ export const api = {
     req<Rule[]>("GET", `/api/clients/${clientId}/grants/${nodeId}/rules`),
   setGrantRules: (clientId: string, nodeId: string, rules: Rule[]) =>
     req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}/rules`, rules),
+
+  getGrantExit: (clientId: string, nodeId: string) =>
+    req<{ exit: boolean }>("GET", `/api/clients/${clientId}/grants/${nodeId}/exit`),
+  setGrantExit: (clientId: string, nodeId: string, exit: boolean) =>
+    req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}/exit`, { exit }),
 
   // config endpoints return text/plain; consumed directly as URLs for download.
   getLayout: () => req<Record<string, { x: number; y: number }>>("GET", "/api/layout"),

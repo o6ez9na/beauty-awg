@@ -157,6 +157,18 @@ func (s *Store) UpdateClient(ctx context.Context, id uuid.UUID, enabled bool, dn
 	return err
 }
 
+// RenameClient sets a client's display name.
+func (s *Store) RenameClient(ctx context.Context, id uuid.UUID, name string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE clients SET name = $2 WHERE id = $1`, id, name)
+	return err
+}
+
+// RenameNode sets a node's display name.
+func (s *Store) RenameNode(ctx context.Context, id uuid.UUID, name string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE nodes SET name = $2 WHERE id = $1`, id, name)
+	return err
+}
+
 // GetNodeForExport returns hub + one node for RenderNode.
 func (s *Store) GetNodeForExport(ctx context.Context, id uuid.UUID) (awg.Hub, awg.Node, error) {
 	hub, err := s.GetHub(ctx)
@@ -202,14 +214,14 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	c.Address, _ = netip.ParseAddr(addr)
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT n.id, host(n.address), n.dns,
+		SELECT n.id, host(n.address), n.dns, g.exit, n.is_hub,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
 		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id)
 		FROM grants g
 		JOIN nodes n ON n.id = g.node_id
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		WHERE g.client_id = $1 AND n.status = 'active' AND n.address IS NOT NULL
-		GROUP BY n.id`, id)
+		GROUP BY n.id, g.exit`, id)
 	if err != nil {
 		return awg.Hub{}, awg.Client{}, nil, err
 	}
@@ -222,11 +234,12 @@ func (s *Store) GetClientForExport(ctx context.Context, id uuid.UUID) (awg.Hub, 
 	for rows.Next() {
 		var nodeID uuid.UUID
 		var naddr, ndns string
+		var exit, isHub bool
 		var subnets, domains []string
-		if err := rows.Scan(&nodeID, &naddr, &ndns, &subnets, &domains); err != nil {
+		if err := rows.Scan(&nodeID, &naddr, &ndns, &exit, &isHub, &subnets, &domains); err != nil {
 			return awg.Hub{}, awg.Client{}, nil, err
 		}
-		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns, Domains: domains}
+		g := awg.Grant{ClientAddr: c.Address, Rules: rulesByGrant[grantKey(id, nodeID)], NodeDNS: ndns, Domains: domains, IsExit: isHub, NodeExit: exit && !isHub}
 		g.NodeAddr, _ = netip.ParseAddr(naddr)
 		for _, sn := range subnets {
 			if p, e := netip.ParsePrefix(sn); e == nil {

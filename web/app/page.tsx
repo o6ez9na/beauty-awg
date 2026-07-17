@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import { api, ApiError, Node, Client } from "./lib/api";
 import ConfigModal from "./components/ConfigModal";
 import AccessGraph from "./components/AccessGraph";
+import ConfirmModal from "./components/ConfirmModal";
+import RenameModal from "./components/RenameModal";
+import ClientDetails from "./components/ClientDetails";
+import Toaster from "./components/Toaster";
+import { toast } from "./lib/toast";
 
 type Modal = { title: string; url: string; filename: string; vpnLinkUrl?: string };
 
@@ -82,7 +87,6 @@ export default function Dashboard() {
               selected={selectedClient}
               onSelect={setSelectedClient}
               onChange={guard}
-              onConfig={setModal}
             />
           ) : (
             <NodesTab nodes={nodes} onChange={guard} onConfig={setModal} />
@@ -100,6 +104,8 @@ export default function Dashboard() {
         />
       </main>
 
+      <Toaster />
+
       {modal && (
         <ConfigModal
           title={modal.title}
@@ -116,15 +122,17 @@ export default function Dashboard() {
 /* ---------------- Clients ---------------- */
 
 function ClientsTab({
-  clients, selected, onSelect, onChange, onConfig,
+  clients, selected, onSelect, onChange,
 }: {
   clients: Client[];
   selected: string | null;
   onSelect: (id: string | null) => void;
   onChange: (fn: () => Promise<void>) => void;
-  onConfig: (m: Modal) => void;
 }) {
   const [name, setName] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const open = openId ? clients.find((c) => c.id === openId) ?? null : null;
 
   function add() {
     const n = name.trim();
@@ -141,7 +149,8 @@ function ClientsTab({
           <div
             key={c.id}
             className={"item" + (c.id === selected ? " selected" : "")}
-            onClick={() => onSelect(c.id === selected ? null : c.id)}
+            onClick={() => { onSelect(c.id); setOpenId(c.id); }}
+            style={{ cursor: "pointer" }}
           >
             <div className="item-head">
               <span className={"dot " + (c.online ? "live" : "")} title={c.online ? "online" : "offline"} />
@@ -153,31 +162,31 @@ function ClientsTab({
               {c.granted_nodes.length ? `${c.granted_nodes.length} node(s)` : "none yet — drag an arrow in the graph"}
             </div>
             <div className="item-actions" onClick={(e) => e.stopPropagation()}>
-              <button
-                className="ghost"
-                onClick={() => onConfig({
-                  title: c.name,
-                  url: api.clientConfigUrl(c.id),
-                  filename: `${c.name}.conf`,
-                  vpnLinkUrl: api.clientVPNLinkUrl(c.id),
-                })}
-              >
-                Config &amp; QR
-              </button>
               <span
-                className={"toggle" + (c.enabled ? " on" : "")}
+                className="switch-wrap"
+                role="switch"
+                aria-checked={c.enabled}
                 onClick={() => onChange(() => api.updateClient(c.id, !c.enabled, ""))}
               >
-                {c.enabled ? "● enabled" : "○ disabled"}
+                <span className={"switch" + (c.enabled ? " on" : "")} />
+                <span className={"switch-label" + (c.enabled ? " on" : "")}>
+                  {c.enabled ? "enabled" : "disabled"}
+                </span>
               </span>
-              <button className="danger" style={{ marginLeft: "auto" }} onClick={() => onChange(() => api.deleteClient(c.id))}>
-                Delete
-              </button>
             </div>
           </div>
         ))}
         {clients.length === 0 && <div className="empty">No clients yet. Add one below.</div>}
       </div>
+
+      {open && (
+        <ClientDetails
+          client={open}
+          onRename={(nm) => onChange(() => api.renameClient(open.id, nm))}
+          onDelete={() => { onChange(() => api.deleteClient(open.id)); setOpenId(null); }}
+          onClose={() => setOpenId(null)}
+        />
+      )}
 
       <div className="addbox">
         <p className="eyebrow" style={{ margin: 0 }}>Add a client</p>
@@ -210,6 +219,8 @@ function NodesTab({
   const [name, setName] = useState("");
   const [iface, setIface] = useState("eth0");
   const [subnets, setSubnets] = useState("");
+  const [confirmDel, setConfirmDel] = useState<Node | null>(null);
+  const [renaming, setRenaming] = useState<Node | null>(null);
 
   const pending = nodes.filter((n) => n.status === "pending");
   const active = nodes.filter((n) => n.status === "active");
@@ -267,7 +278,8 @@ function NodesTab({
                   >
                     Config
                   </button>
-                  <button className="danger" style={{ marginLeft: "auto" }} onClick={() => onChange(() => api.deleteNode(n.id))}>
+                  <button className="ghost" onClick={() => setRenaming(n)}>Rename</button>
+                  <button className="danger" style={{ marginLeft: "auto" }} onClick={() => setConfirmDel(n)}>
                     Delete
                   </button>
                 </div>
@@ -277,6 +289,26 @@ function NodesTab({
         ))}
         {active.length === 0 && <div className="empty">No nodes yet. Add one below, or run the node installer.</div>}
       </div>
+
+      {confirmDel && (
+        <ConfirmModal
+          title={`Delete ${confirmDel.name}?`}
+          body="Removes the node and all access grants to it. This cannot be undone."
+          onConfirm={() => {
+            onChange(() => api.deleteNode(confirmDel.id));
+            toast(`Node ${confirmDel.name} deleted — re-share configs of clients that had access`, "warn");
+          }}
+          onClose={() => setConfirmDel(null)}
+        />
+      )}
+      {renaming && (
+        <RenameModal
+          title="Rename node"
+          current={renaming.name}
+          onSave={(nm) => onChange(() => api.renameNode(renaming.id, nm))}
+          onClose={() => setRenaming(null)}
+        />
+      )}
 
       <div className="addbox">
         <p className="eyebrow" style={{ margin: 0 }}>Add a node manually</p>
@@ -308,6 +340,7 @@ function NodeNet({ node, onChange }: { node: Node; onChange: (fn: () => Promise<
     const list = domains.split(",").map((s) => s.trim()).filter(Boolean);
     if (dns !== node.dns || list.join(",") !== node.domains.join(",")) {
       onChange(() => api.updateNode(node.id, dns, list));
+      toast(`Node ${node.name} DNS changed — re-share configs of clients with access`, "warn");
     }
   }
 

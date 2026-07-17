@@ -80,8 +80,9 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateNodeReq struct {
-	DNS     string   `json:"dns"`
-	Domains []string `json:"domains"`
+	DNS     *string   `json:"dns"`
+	Domains *[]string `json:"domains"`
+	Name    *string   `json:"name"`
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
@@ -93,13 +94,27 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.St.SetNodeDNS(r.Context(), id, req.DNS); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if req.Name != nil {
+		if *req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		if err := s.St.RenameNode(r.Context(), id, *req.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
-	if err := s.St.SetNodeDomains(r.Context(), id, req.Domains); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if req.DNS != nil {
+		if err := s.St.SetNodeDNS(r.Context(), id, *req.DNS); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if req.Domains != nil {
+		if err := s.St.SetNodeDomains(r.Context(), id, *req.Domains); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := s.Svc.Reconcile(r.Context()); err != nil {
 		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
@@ -187,8 +202,9 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateClientReq struct {
-	Enabled bool   `json:"enabled"`
-	DNS     string `json:"dns"`
+	Enabled *bool   `json:"enabled"`
+	DNS     *string `json:"dns"`
+	Name    *string `json:"name"`
 }
 
 func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
@@ -200,9 +216,21 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.St.UpdateClient(r.Context(), id, req.Enabled, req.DNS); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if req.Name != nil {
+		if *req.Name == "" {
+			http.Error(w, "name required", http.StatusBadRequest)
+			return
+		}
+		if err := s.St.RenameClient(r.Context(), id, *req.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if req.Enabled != nil && req.DNS != nil {
+		if err := s.St.UpdateClient(r.Context(), id, *req.Enabled, *req.DNS); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := s.Svc.Reconcile(r.Context()); err != nil {
 		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
@@ -347,6 +375,47 @@ func (s *Server) handleSetGrantRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.St.SetGrantRules(r.Context(), cid, nid, rules); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Svc.Reconcile(r.Context()); err != nil {
+		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- grant internet-exit ---
+
+func (s *Server) handleGetGrantExit(w http.ResponseWriter, r *http.Request) {
+	cid, ok := pathUUID(w, r, "id")
+	nid, ok2 := pathUUID(w, r, "nodeId")
+	if !ok || !ok2 {
+		return
+	}
+	exit, err := s.St.GrantExit(r.Context(), cid, nid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"exit": exit})
+}
+
+type setGrantExitReq struct {
+	Exit bool `json:"exit"`
+}
+
+func (s *Server) handleSetGrantExit(w http.ResponseWriter, r *http.Request) {
+	cid, ok := pathUUID(w, r, "id")
+	nid, ok2 := pathUUID(w, r, "nodeId")
+	if !ok || !ok2 {
+		return
+	}
+	var req setGrantExitReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := s.St.SetGrantExit(r.Context(), cid, nid, req.Exit); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

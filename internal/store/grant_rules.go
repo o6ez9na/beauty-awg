@@ -110,6 +110,56 @@ func (s *Store) SetGrantRules(ctx context.Context, clientID, nodeID uuid.UUID, r
 	})
 }
 
+// GrantExit reports whether this grant routes the client's whole internet out
+// the node's WAN.
+func (s *Store) GrantExit(ctx context.Context, clientID, nodeID uuid.UUID) (bool, error) {
+	var exit bool
+	err := s.Pool.QueryRow(ctx,
+		`SELECT exit FROM grants WHERE client_id=$1 AND node_id=$2`, clientID, nodeID).Scan(&exit)
+	if err == pgx.ErrNoRows {
+		return false, fmt.Errorf("grant does not exist")
+	}
+	return exit, err
+}
+
+// SetGrantExit toggles internet-exit for a grant. WireGuard cryptokey routing is
+// dst-based and global per interface, so only ONE node can be the active exit at
+// a time: enabling exit on a node while a DIFFERENT node already has an exit
+// grant is rejected. The hub node (is_hub) is its own exit and cannot be toggled
+// this way.
+func (s *Store) SetGrantExit(ctx context.Context, clientID, nodeID uuid.UUID, exit bool) error {
+	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+		var exists, isHub bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM grants WHERE client_id=$1 AND node_id=$2),
+			        COALESCE((SELECT is_hub FROM nodes WHERE id=$2), false)`,
+			clientID, nodeID).Scan(&exists, &isHub); err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("grant does not exist")
+		}
+		if isHub {
+			return fmt.Errorf("the internet-exit hub node is already a full-tunnel exit")
+		}
+		if exit {
+			var otherName string
+			err := tx.QueryRow(ctx, `
+				SELECT n.name FROM grants g JOIN nodes n ON n.id = g.node_id
+				WHERE g.exit AND g.node_id <> $1 LIMIT 1`, nodeID).Scan(&otherName)
+			if err == nil {
+				return fmt.Errorf("node %q is already the internet exit — only one exit node is allowed at a time", otherName)
+			}
+			if err != pgx.ErrNoRows {
+				return err
+			}
+		}
+		_, err := tx.Exec(ctx,
+			`UPDATE grants SET exit=$3 WHERE client_id=$1 AND node_id=$2`, clientID, nodeID, exit)
+		return err
+	})
+}
+
 func toRule(dest, proto string, pf, pt *int) (awg.GrantRule, error) {
 	p, err := netip.ParsePrefix(dest)
 	if err != nil {

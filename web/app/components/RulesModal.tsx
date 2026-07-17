@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api, Rule } from "../lib/api";
+import { configChanged } from "../lib/toast";
 
 // Editor for a grant's access level: destination subnets/hosts + optional ports.
 // No rules = full access to all the node's subnets.
@@ -23,6 +24,7 @@ export default function RulesModal({
   onRevoke?: () => void;
 }) {
   const [rules, setRules] = useState<Rule[]>([]);
+  const [exit, setExit] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -33,6 +35,7 @@ export default function RulesModal({
       .then((r) => setRules(r || []))
       .catch((e) => setErr(String(e)))
       .finally(() => setLoaded(true));
+    api.getGrantExit(clientId, nodeId).then((r) => setExit(r.exit)).catch(() => {});
   }, [clientId, nodeId]);
 
   function update(i: number, patch: Partial<Rule>) {
@@ -52,7 +55,10 @@ export default function RulesModal({
     setBusy(true);
     setErr("");
     try {
+      // Exit first: it enforces the single-exit-node invariant and may reject.
+      await api.setGrantExit(clientId, nodeId, exit);
       await api.setGrantRules(clientId, nodeId, rules);
+      configChanged(clientName);
       onClose();
     } catch (e) {
       setErr(String(e));
@@ -77,6 +83,19 @@ export default function RulesModal({
           No rules = full access to all node subnets.
         </p>
         {err && <div className="error">{err}</div>}
+
+        <div
+          className="switch-wrap"
+          role="switch"
+          aria-checked={exit}
+          onClick={() => setExit((v) => !v)}
+          style={{ margin: "6px 0 14px" }}
+        >
+          <span className={"switch" + (exit ? " on" : "")} />
+          <span className={"switch-label" + (exit ? " on" : "")}>
+            route all internet through this node (home IP exit)
+          </span>
+        </div>
 
         <datalist id="subnet-hints">
           {subnetHints.map((s) => (
