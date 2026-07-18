@@ -41,6 +41,12 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
+//go:embed logo.svg
+var logoSVG []byte
+
+//go:embed favicon.svg
+var faviconSVG []byte
+
 var (
 	password  = os.Getenv("NODE_PASSWORD")
 	listen    = env("NODE_LISTEN", ":8088")
@@ -78,6 +84,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", serveIndex)
+	mux.HandleFunc("GET /logo.svg", serveSVG(logoSVG))
+	mux.HandleFunc("GET /favicon.svg", serveSVG(faviconSVG))
 	mux.HandleFunc("GET /api/state", auth(getState))
 	mux.HandleFunc("POST /api/connect", auth(connect))
 	mux.HandleFunc("GET /api/config", auth(getConfig))
@@ -374,6 +382,15 @@ func writeAndApply(config string) error {
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML)
+}
+
+// serveSVG serves an embedded SVG asset (logo / favicon).
+func serveSVG(b []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(b)
+	}
 }
 
 func auth(next http.HandlerFunc) http.HandlerFunc {
