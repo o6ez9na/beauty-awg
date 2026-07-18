@@ -42,6 +42,11 @@ curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/ins
   optionally installs a **node web UI** (`awg-nodeagent`, systemd) to view/edit
   the node's awg config from a browser on the LAN (`http://<node-lan-ip>:8088`,
   user `admin`). Keep it LAN-only — it edits the config and runs `awg-quick` as root.
+  The node's poll to the panel also reports its own version; if a newer
+  `nodeagent` release exists, the node web UI shows an **update banner**. Nothing
+  is applied automatically — updating (and the restart it requires) needs an
+  explicit click and confirmation in that node's own UI, so the panel can only
+  notify, never push code to a node its owner hasn't agreed to run.
 
 Replace `YOURUSER` with your GitHub repo (or set `REPO_URL=` env before running).
 

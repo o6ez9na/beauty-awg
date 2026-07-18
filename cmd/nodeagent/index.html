@@ -37,6 +37,17 @@
 <div class="wrap">
   <h1><img src="/logo.svg" alt="" style="height:26px;vertical-align:-6px;margin-right:9px" />6ers3<span>rk</span> · node</h1>
 
+  <!-- UPDATE (shown whenever the panel reports a newer release) -->
+  <div id="updateBanner" class="card hide" style="border-color:var(--accent)">
+    <div class="row" style="justify-content:space-between;margin-top:0">
+      <div>Update available: <span id="updLatest" class="mono"></span> <span class="muted">(current: <span id="updCurrent" class="mono"></span>)</span></div>
+      <div class="row" style="margin-top:0">
+        <button id="updateBtn">Update &amp; restart</button>
+        <span id="updateMsg" class="msg"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- CONNECT (shown when not yet active) -->
   <div id="connect" class="card hide">
     <h2>Connect to a panel</h2>
@@ -88,6 +99,12 @@ async function refresh() {
   try {
     s = await (await api("/api/state")).json();
   } catch { return; }
+
+  show("updateBanner", !!s.update_available);
+  if (s.update_available) {
+    $("updLatest").textContent = s.latest_version;
+    $("updCurrent").textContent = s.version || "?";
+  }
 
   const active = s.status === "active";
   show("connect", !s.enrolled || s.status === "rejected" ? false : false); // decided below
@@ -149,6 +166,23 @@ $("save").onclick = async () => {
   $("save").disabled = false;
 };
 $("reload").onclick = loadConfig;
+
+$("updateBtn").onclick = async () => {
+  const latest = $("updLatest").textContent;
+  if (!confirm(`Update node agent to ${latest} and restart now? The tunnel will drop for a few seconds.`)) return;
+  $("updateBtn").disabled = true;
+  $("updateMsg").className = "msg";
+  $("updateMsg").textContent = "updating…";
+  const r = await api("/api/update", { method: "POST" });
+  if (r.ok) {
+    $("updateMsg").className = "msg ok";
+    $("updateMsg").textContent = "restarting…";
+  } else {
+    $("updateMsg").className = "msg err";
+    $("updateMsg").textContent = await r.text();
+    $("updateBtn").disabled = false;
+  }
+};
 
 refresh();
 setInterval(refresh, 4000);

@@ -31,12 +31,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"6ers3rk/internal/awg"
 )
+
+// version is set at build time via -ldflags "-X main.version=vX.Y.Z" (see
+// .github/workflows/release.yml). Empty/"dev" (local builds) never reports an
+// update — there's no baseline release tag to compare against.
+var version = "dev"
 
 //go:embed index.html
 var indexHTML []byte
@@ -65,10 +71,12 @@ type state struct {
 // agent holds mutable runtime state shared between the HTTP handlers and the
 // polling loop.
 type agent struct {
-	mu      sync.Mutex
-	st      state
-	status  string // last poll result: "" | pending | active | rejected
-	polling bool
+	mu            sync.Mutex
+	st            state
+	status        string // last poll result: "" | pending | active | rejected
+	polling       bool
+	latestVersion string // newest nodeagent release tag reported by the panel
+	updateURL     string // set when latestVersion > our own version
 }
 
 var a = &agent{}
@@ -91,6 +99,7 @@ func main() {
 	mux.HandleFunc("GET /api/config", auth(getConfig))
 	mux.HandleFunc("POST /api/config", auth(applyConfig))
 	mux.HandleFunc("GET /api/status", auth(getStatus))
+	mux.HandleFunc("POST /api/update", auth(applyUpdate))
 
 	log.Printf("node agent on %s (iface=%s)", listen, iface)
 	log.Fatal(http.ListenAndServe(listen, mux))
@@ -99,16 +108,26 @@ func main() {
 // ---------------- connect + enrollment ----------------
 
 type stateResp struct {
-	Enrolled bool   `json:"enrolled"`
-	Status   string `json:"status"`
-	Panel    string `json:"panel"`
-	Subnet   string `json:"subnet"`
-	Iface    string `json:"iface"`
+	Enrolled        bool   `json:"enrolled"`
+	Status          string `json:"status"`
+	Panel           string `json:"panel"`
+	Subnet          string `json:"subnet"`
+	Iface           string `json:"iface"`
+	Version         string `json:"version"`
+	LatestVersion   string `json:"latest_version,omitempty"`
+	UpdateAvailable bool   `json:"update_available"`
 }
 
 func getState(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	resp := stateResp{Enrolled: a.st.Token != "", Status: a.status, Panel: a.st.Panel}
+	resp := stateResp{
+		Enrolled:        a.st.Token != "",
+		Status:          a.status,
+		Panel:           a.st.Panel,
+		Version:         version,
+		LatestVersion:   a.latestVersion,
+		UpdateAvailable: a.updateURL != "",
+	}
 	a.mu.Unlock()
 	if ifc, sn, err := detectLAN(); err == nil {
 		resp.Iface = ifc
@@ -214,7 +233,7 @@ func (a *agent) pollLoop() {
 		a.mu.Unlock()
 
 		if panel != "" && token != "" {
-			status, config, gone, err := poll(panel, token)
+			status, config, latestVersion, updateURL, gone, err := poll(panel, token)
 			switch {
 			case gone:
 				// The panel no longer knows this token: the node was deleted.
@@ -229,6 +248,8 @@ func (a *agent) pollLoop() {
 			default:
 				a.mu.Lock()
 				a.status = status
+				a.latestVersion = latestVersion
+				a.updateURL = updateURL
 				a.mu.Unlock()
 				if status == "active" && config != "" {
 					full := strings.ReplaceAll(config, awg.NodePrivatePlaceholder, priv)
@@ -248,25 +269,32 @@ func (a *agent) pollLoop() {
 }
 
 // poll returns gone=true when the panel reports the token is unknown (404),
-// i.e. the node was deleted from the panel.
-func poll(panel, token string) (status, config string, gone bool, err error) {
-	resp, err := http.Get(panel + "/api/enroll/" + token)
+// i.e. the node was deleted from the panel. It reports its own version and
+// arch so the panel can tell it about a newer nodeagent release.
+func poll(panel, token string) (status, config, latestVersion, updateURL string, gone bool, err error) {
+	u := panel + "/api/enroll/" + token + "?version=" + url.QueryEscape(version) + "&arch=" + url.QueryEscape(runtime.GOARCH)
+	resp, err := http.Get(u)
 	if err != nil {
-		return "", "", false, err
+		return "", "", "", "", false, err
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
-		return "", "", true, nil
+		return "", "", "", "", true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", false, fmt.Errorf("panel said %d", resp.StatusCode)
+		return "", "", "", "", false, fmt.Errorf("panel said %d", resp.StatusCode)
 	}
-	var out struct{ Status, Config string }
+	var out struct {
+		Status        string `json:"status"`
+		Config        string `json:"config"`
+		LatestVersion string `json:"latest_version"`
+		UpdateURL     string `json:"update_url"`
+	}
 	if err := json.Unmarshal(rb, &out); err != nil {
-		return "", "", false, err
+		return "", "", "", "", false, err
 	}
-	return out.Status, out.Config, false, nil
+	return out.Status, out.Config, out.LatestVersion, out.UpdateURL, false, nil
 }
 
 // teardown brings the interface down and removes the local config.
@@ -445,6 +473,74 @@ func getStatus(w http.ResponseWriter, r *http.Request) {
 	run(&out, "awg", "show", iface)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte(out.String()))
+}
+
+// ---------------- self-update ----------------
+//
+// The panel merely notices a newer release exists (see poll()); it never
+// pushes an update on its own. Applying one always requires an explicit
+// POST here, which only this node's own web UI issues, after the operator
+// confirms — the node owner stays in control of what code runs on their box.
+
+func applyUpdate(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	updateURL := a.updateURL
+	a.mu.Unlock()
+	if updateURL == "" {
+		http.Error(w, "no update available", http.StatusBadRequest)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		http.Error(w, "resolve own path: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := selfUpdate(updateURL, exe); err != nil {
+		http.Error(w, "update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "updating"})
+	// Restart after the response flushes. The binary on disk is already the
+	// new one (selfUpdate's rename swapped it); this process keeps running
+	// from the old, now-unlinked inode until systemd restarts it onto the new
+	// file. Best-effort: if this node isn't systemd-managed, the swap still
+	// took — a manual restart picks it up.
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = exec.Command("systemctl", "restart", "awg-nodeagent").Run()
+	}()
+}
+
+// selfUpdate downloads url to a temp file next to exe and atomically renames
+// it into place. Downloading directly into exe would hit ETXTBSY — the kernel
+// refuses to open a running executable's text segment for writing — but
+// rename() has no such restriction.
+func selfUpdate(url, exe string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download: %s", resp.Status)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(exe), ".awg-nodeagent.*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once renamed away
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o755); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), exe)
 }
 
 // ---------------- helpers ----------------
