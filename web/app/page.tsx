@@ -58,7 +58,10 @@ export default function Dashboard() {
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand">beautiful<b>wg</b></div>
+        <div className="brand">
+          <img src="/logo.svg" alt="" className="brand-logo" />
+          <span>6ers3<b>rk</b></span>
+        </div>
         <div className="meshstat">
           <span><b>{clients.length}</b> clients</span>
           <span><b>{activeNodes.length}</b> nodes</span>

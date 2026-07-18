@@ -7,8 +7,8 @@ import (
 	"net/netip"
 	"time"
 
-	"beautifulwg/internal/awg"
-	"beautifulwg/internal/store"
+	"6ers3rk/internal/awg"
+	"6ers3rk/internal/store"
 
 	"github.com/google/uuid"
 )

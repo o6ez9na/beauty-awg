@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 
-	"beautifulwg/internal/awg"
+	"6ers3rk/internal/awg"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"

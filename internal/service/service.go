@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"sync"
 
-	"beautifulwg/internal/awg"
-	"beautifulwg/internal/resolver"
-	"beautifulwg/internal/store"
+	"6ers3rk/internal/awg"
+	"6ers3rk/internal/resolver"
+	"6ers3rk/internal/store"
 )
 
 // Service is the glue: it turns current DB state into live hub config + nft

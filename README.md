@@ -1,4 +1,4 @@
-# beautifulwg
+# 6ers3rk
 
 Web panel to manage **AmneziaWG** users, nodes and per-user access. Routes a
 device's traffic into home LANs that sit behind CGNAT, via a VPS relay.
@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/ins
 ```
 
 - **panel** installs AmneziaWG (module+tools), Docker, clones the repo to
-  `/opt/beautifulwg`, generates `.env` (prompts for endpoint + admin password),
+  `/opt/6ers3rk`, generates `.env` (prompts for endpoint + admin password),
   enables IP forwarding, and runs `docker compose up -d --build`.
 - **node** installs AmneziaWG, enables forwarding, asks you to paste the node
   `.conf` downloaded from the panel, and enables `awg-quick@awg0` at boot. It then
@@ -51,7 +51,7 @@ Replace `YOURUSER` with your GitHub repo (or set `REPO_URL=` env before running)
 curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/uninstall.sh | sudo bash
 ```
 
-Removes only beautifulwg's own bits and leaves shared things (Docker, the AmneziaWG
+Removes only 6ers3rk's own bits and leaves shared things (Docker, the AmneziaWG
 kernel module) alone. Flags: `PURGE_DATA=1` also deletes the DB volume / repo / node
 keypair; `PURGE_AWG=1` also removes the kernel module (+ tools on a node); `FORCE=1`
 skips the confirmation.

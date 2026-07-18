@@ -1,4 +1,4 @@
-/* beautifulwg — a control plane for a private WireGuard mesh.
+/* 6ers3rk — a control plane for a private WireGuard mesh.
    Thesis: the network is the material. IPs, subnets, domains and keys are set in
    monospace as first-class content; one signal color (teal) marks encrypted
    links. Everything else stays quiet: hairline rules, restrained motion. */
@@ -82,9 +82,17 @@ body::before {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   font-weight: 700;
   letter-spacing: 0.3px;
   font-size: 15px;
+}
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  filter: drop-shadow(0 0 6px rgba(180, 0, 0, 0.45));
 }
 .brand b { color: var(--signal); font-weight: 700; }
 

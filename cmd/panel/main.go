@@ -9,12 +9,12 @@ import (
 	"os"
 	"strconv"
 
-	"beautifulwg/internal/api"
-	"beautifulwg/internal/awg"
-	"beautifulwg/internal/config"
-	"beautifulwg/internal/resolver"
-	"beautifulwg/internal/service"
-	"beautifulwg/internal/store"
+	"6ers3rk/internal/api"
+	"6ers3rk/internal/awg"
+	"6ers3rk/internal/config"
+	"6ers3rk/internal/resolver"
+	"6ers3rk/internal/service"
+	"6ers3rk/internal/store"
 )
 
 func main() {

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"beautifulwg/internal/service"
-	"beautifulwg/internal/store"
+	"6ers3rk/internal/service"
+	"6ers3rk/internal/store"
 )
 
 // Server holds dependencies for HTTP handlers.

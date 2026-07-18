@@ -1,4 +1,4 @@
-module beautifulwg
+module 6ers3rk
 
 go 1.26.5
 

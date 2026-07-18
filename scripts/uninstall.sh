@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# beautifulwg uninstaller. Mirror of install.sh.
+# 6ers3rk uninstaller. Mirror of install.sh.
 #
 #   curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/uninstall.sh | sudo bash
 #
 # Asks whether to remove the PANEL or a NODE.
 # Non-interactive:  ... | sudo bash -s -- panel     (or: node)
 #
-# By default removes only beautifulwg's own bits and leaves shared things
+# By default removes only 6ers3rk's own bits and leaves shared things
 # (Docker, the AmneziaWG kernel module) alone — the host may run other apps.
-#   PURGE_DATA=1   also delete the DB volume + /opt/beautifulwg (panel) / state (node)
+#   PURGE_DATA=1   also delete the DB volume + /opt/6ers3rk (panel) / state (node)
 #   PURGE_AWG=1    also remove the AmneziaWG kernel module (+ tools on a node)
 #   FORCE=1        skip the confirmation prompt
 #
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/beautifulwg}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/6ers3rk}"
 AWG_IFACE="${AWG_IFACE:-awg0}"
 AWG_CONF_DIR="/etc/amnezia/amneziawg"
 
@@ -56,7 +56,7 @@ fi
 [ "$MODE" = panel ] || [ "$MODE" = node ] || die "MODE must be panel or node (got: $MODE)"
 
 if [ -z "$FORCE" ]; then
-  echo "About to remove beautifulwg $(c '1;36' "$MODE")." >/dev/tty
+  echo "About to remove 6ers3rk $(c '1;36' "$MODE")." >/dev/tty
   [ -n "$PURGE_DATA" ] && echo "  + PURGE_DATA: DB volume / repo / node state will be DELETED" >/dev/tty
   [ -n "$PURGE_AWG" ]  && echo "  + PURGE_AWG: AmneziaWG kernel module will be removed" >/dev/tty
   ask "Type 'yes' to continue" confirm
@@ -85,7 +85,7 @@ remove_awg_module() {
 }
 
 remove_sysctl() {
-  rm -f /etc/sysctl.d/99-beautifulwg.conf
+  rm -f /etc/sysctl.d/99-6ers3rk.conf
 }
 
 # --- panel removal ---------------------------------------------------------
@@ -97,7 +97,7 @@ remove_panel() {
     else
       ( cd "$INSTALL_DIR" && docker compose down --remove-orphans 2>/dev/null ) || true
     fi
-    docker image rm beautifulwg-backend beautifulwg-frontend 2>/dev/null || true
+    docker image rm 6ers3rk-backend 6ers3rk-frontend 2>/dev/null || true
   else
     warn "$INSTALL_DIR not found; skipping compose"
   fi

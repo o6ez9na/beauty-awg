@@ -35,7 +35,7 @@ import (
 	"sync"
 	"time"
 
-	"beautifulwg/internal/awg"
+	"6ers3rk/internal/awg"
 )
 
 //go:embed index.html
@@ -384,7 +384,7 @@ func auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		_, pass, ok := r.BasicAuth()
 		if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(password)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="beautifulwg node"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="6ers3rk node"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
