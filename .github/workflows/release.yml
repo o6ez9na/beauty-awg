@@ -180,7 +180,7 @@ jobs:
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
           out="nodeagent-${version}-${GOOS}-${GOARCH}${ext}"
-          go build -trimpath -ldflags "-s -w" -o "$out" ./cmd/nodeagent
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "$out" ./cmd/nodeagent
           echo "ARTIFACT=$out" >> "$GITHUB_ENV"
 
       - name: Upload build artifact

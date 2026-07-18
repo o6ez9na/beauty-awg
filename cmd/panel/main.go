@@ -12,6 +12,7 @@ import (
 	"6ers3rk/internal/api"
 	"6ers3rk/internal/awg"
 	"6ers3rk/internal/config"
+	"6ers3rk/internal/release"
 	"6ers3rk/internal/resolver"
 	"6ers3rk/internal/service"
 	"6ers3rk/internal/store"
@@ -77,6 +78,7 @@ func main() {
 		Svc:           svc,
 		Secret:        cfg.SessionSecret,
 		SecureCookies: os.Getenv("INSECURE_COOKIES") == "",
+		Release:       release.NewChecker(),
 	}
 
 	if err := api.BootstrapAdmin(ctx, srv, os.Getenv("ADMIN_USER"), os.Getenv("ADMIN_PASSWORD")); err != nil {

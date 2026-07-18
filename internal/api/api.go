@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"6ers3rk/internal/release"
 	"6ers3rk/internal/service"
 	"6ers3rk/internal/store"
 )
@@ -14,6 +15,7 @@ type Server struct {
 	Svc           *service.Service
 	Secret        string
 	SecureCookies bool
+	Release       *release.Checker // nil disables nodeagent update notices
 }
 
 // Routes wires the mux. Auth-protected routes go through requireAuth.

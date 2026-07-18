@@ -68,6 +68,12 @@ func (s *Server) handleEnrollPoll(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["config"] = awg.RenderNode(hub, node, reach)
 	}
+	if s.Release != nil {
+		if latest, url, ok := s.Release.Update(r.URL.Query().Get("version"), r.URL.Query().Get("arch")); ok {
+			resp["latest_version"] = latest
+			resp["update_url"] = url
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
