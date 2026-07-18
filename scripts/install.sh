@@ -455,10 +455,12 @@ update_panel() {
   info "pulling latest source"
   git -C "$INSTALL_DIR" pull --ff-only || warn "git pull failed; refreshing current checkout"
   cd "$INSTALL_DIR"
-  # Reuse the method chosen at install time: a GHCR override file means images.
-  if [ -z "${PANEL_INSTALL_METHOD:-}" ]; then
-    if [ -f docker-compose.ghcr.yml ]; then PANEL_INSTALL_METHOD=images; else PANEL_INSTALL_METHOD=source; fi
-  fi
+  # Default to prebuilt GHCR images on update — fast, no local build. Whether a
+  # GHCR override file exists from a previous install says nothing about
+  # whether prebuilt images exist for the CURRENT release, so don't gate on it:
+  # provision_panel already tries a pull first and silently falls back to a
+  # source build if that fails (private package, no matching tag, offline...).
+  : "${PANEL_INSTALL_METHOD:=images}"
   info "refreshing containers (method: $PANEL_INSTALL_METHOD)"
   provision_panel
   ok "panel updated. UI: http://$(hostname -I | awk '{print $1}'):3000  (login: admin)"
