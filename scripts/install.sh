@@ -8,11 +8,19 @@
 # Non-interactive:  ... | sudo bash -s -- panel      (or: node)
 #                   or set INSTALL_MODE=panel|node
 #
+# If the chosen component is ALREADY installed, the script UPDATES it in place
+# (pull latest + refresh containers, or refresh the node agent binary + restart)
+# instead of reinstalling — keeping .env / the web-UI password / enrollment.
+# Set FORCE_REINSTALL=1 to run the full install path anyway.
+#
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/o6ez9na/beauty-awg.git}"
 REPO_SLUG="${REPO_SLUG:-o6ez9na/beauty-awg}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/6ers3rk}"
+# Pre-rename install locations, migrated to $INSTALL_DIR on update (see
+# migrate_legacy_panel). Space-separated so extra paths can be appended via env.
+LEGACY_INSTALL_DIRS="${LEGACY_INSTALL_DIRS:-/opt/beautifulwg /opt/beauty-awg}"
 PANEL_IMAGE_API="${PANEL_IMAGE_API:-ghcr.io/${REPO_SLUG}/panel-api}"
 PANEL_IMAGE_WEB="${PANEL_IMAGE_WEB:-ghcr.io/${REPO_SLUG}/panel-web}"
 AWG_IFACE="${AWG_IFACE:-awg0}"
@@ -72,7 +80,13 @@ if [ -z "$MODE" ]; then
   esac
 fi
 [ "$MODE" = panel ] || [ "$MODE" = node ] || die "MODE must be panel or node (got: $MODE)"
-info "installing mode: $(c '1;36' "$MODE")"
+info "mode: $(c '1;36' "$MODE")"
+
+# --- already-installed detection -------------------------------------------
+# A panel is "installed" once its repo is cloned AND configured (.env written).
+panel_installed() { [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/.env" ]; }
+# A node is "installed" once the agent's systemd unit exists.
+node_installed()  { [ -f /etc/systemd/system/awg-nodeagent.service ]; }
 
 # --- AmneziaWG -------------------------------------------------------------
 # Built from source via DKMS so it works on Debian AND Ubuntu (the Ubuntu-only
@@ -431,6 +445,57 @@ EOF
   warn "put a TLS reverse proxy in front, then set INSECURE_COOKIES= empty in .env"
 }
 
+# Update an existing panel in place: pull the latest source and refresh the
+# containers, reusing the install-time method and leaving .env untouched. Skips
+# the one-time steps (AmneziaWG, forwarding, TUN, .env) that install_panel runs.
+update_panel() {
+  info "existing panel found in $INSTALL_DIR — $(c '1;36' updating) (not reinstalling)"
+  install_docker
+  pkg_install git
+  info "pulling latest source"
+  git -C "$INSTALL_DIR" pull --ff-only || warn "git pull failed; refreshing current checkout"
+  cd "$INSTALL_DIR"
+  # Reuse the method chosen at install time: a GHCR override file means images.
+  if [ -z "${PANEL_INSTALL_METHOD:-}" ]; then
+    if [ -f docker-compose.ghcr.yml ]; then PANEL_INSTALL_METHOD=images; else PANEL_INSTALL_METHOD=source; fi
+  fi
+  info "refreshing containers (method: $PANEL_INSTALL_METHOD)"
+  provision_panel
+  ok "panel updated. UI: http://$(hostname -I | awk '{print $1}'):3000  (login: admin)"
+}
+
+# Migrate a pre-rename panel checkout (e.g. /opt/beautifulwg) to $INSTALL_DIR
+# WITHOUT data loss. Docker Compose derives the project name — and therefore the
+# DB volume name (e.g. beautifulwg_pgdata) — from the directory name, so after
+# moving we pin COMPOSE_PROJECT_NAME to the old name to reuse the same volume.
+# No-op when $INSTALL_DIR already exists or no legacy checkout is found. Run
+# before the panel_installed check so the migrated dir is then updated normally.
+migrate_legacy_panel() {
+  [ -d "$INSTALL_DIR/.git" ] && return 0   # new location already populated
+  local old="" d
+  for d in $LEGACY_INSTALL_DIRS; do
+    [ "$d" = "$INSTALL_DIR" ] && continue
+    if [ -d "$d/.git" ] && [ -f "$d/.env" ]; then old="$d"; break; fi
+  done
+  [ -n "$old" ] || return 0
+
+  local proj; proj="$(basename "$old")"
+  info "legacy panel found at $old — $(c '1;36' migrating) to $INSTALL_DIR"
+  # Stop the old stack first so its containers/network are cleanly recreated
+  # under the new path. Named volumes are kept (no -v), and awg0 lives in the
+  # host netns, so the tunnels stay up across the restart.
+  if command -v docker >/dev/null 2>&1; then
+    ( cd "$old" && docker compose down --remove-orphans ) || warn "couldn't stop old stack; continuing"
+  fi
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  mv "$old" "$INSTALL_DIR"
+  # Pin the compose project name so the SAME DB volume (${proj}_pgdata) is reused.
+  if ! grep -q '^COMPOSE_PROJECT_NAME=' "$INSTALL_DIR/.env" 2>/dev/null; then
+    printf 'COMPOSE_PROJECT_NAME=%s\n' "$proj" >> "$INSTALL_DIR/.env"
+  fi
+  ok "migrated $old -> $INSTALL_DIR (project '$proj' pinned; DB volume ${proj}_pgdata reused)"
+}
+
 # --- node install ----------------------------------------------------------
 # The node self-enrolls: it announces itself to the panel and waits for the admin
 # to approve, then pulls + applies its config automatically (config push over
@@ -452,6 +517,20 @@ install_node() {
   ok "node agent installed."
   ok "open the node web UI: http://${ip}:8088  (user: admin)"
   info "there, enter the panel's IP and click Connect, then approve the node in the panel."
+}
+
+# Update an existing node agent in place: fetch the newest agent binary and
+# restart the service. Leaves /etc/awg-nodeagent.env (web password), the systemd
+# unit, and enrollment/state intact; skips AmneziaWG + forwarding + TUN setup.
+update_node() {
+  info "existing node agent found — $(c '1;36' updating) (not reinstalling)"
+  # Reuse install-time method; default to a prebuilt binary (source fallback built in).
+  : "${NODE_INSTALL_METHOD:=binary}"
+  provision_nodeagent
+  systemctl daemon-reload
+  systemctl restart awg-nodeagent
+  ok "node agent updated + restarted (systemd: awg-nodeagent)"
+  ok "web editor unchanged: http://$(hostname -I | awk '{print $1}'):8088 (user + password preserved)"
 }
 
 # Optional local web UI on the node to view/edit awg config from a LAN browser.
@@ -585,6 +664,9 @@ EOF
 }
 
 case "$MODE" in
-  panel) install_panel ;;
-  node)  install_node ;;
+  panel)
+    [ -n "${FORCE_REINSTALL:-}" ] || migrate_legacy_panel
+    if [ -z "${FORCE_REINSTALL:-}" ] && panel_installed; then update_panel; else install_panel; fi ;;
+  node)
+    if [ -z "${FORCE_REINSTALL:-}" ] && node_installed; then update_node; else install_node; fi ;;
 esac
