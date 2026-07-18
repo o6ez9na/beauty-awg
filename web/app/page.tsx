@@ -8,6 +8,7 @@ import AccessGraph from "./components/AccessGraph";
 import ConfirmModal from "./components/ConfirmModal";
 import RenameModal from "./components/RenameModal";
 import ClientDetails from "./components/ClientDetails";
+import ColorPickerModal from "./components/ColorPickerModal";
 import Toaster from "./components/Toaster";
 import { toast } from "./lib/toast";
 
@@ -195,6 +196,7 @@ function ClientsTab({
         <ClientDetails
           client={open}
           onRename={(nm) => onChange(() => api.renameClient(open.id, nm))}
+          onColor={(color) => onChange(() => api.setClientColor(open.id, color))}
           onDelete={() => { onChange(() => api.deleteClient(open.id)); setOpenId(null); }}
           onClose={() => setOpenId(null)}
         />
@@ -233,6 +235,7 @@ function NodesTab({
   const [subnets, setSubnets] = useState("");
   const [confirmDel, setConfirmDel] = useState<Node | null>(null);
   const [renaming, setRenaming] = useState<Node | null>(null);
+  const [pickingColor, setPickingColor] = useState<Node | null>(null);
 
   const pending = nodes.filter((n) => n.status === "pending");
   const active = nodes.filter((n) => n.status === "active");
@@ -275,7 +278,12 @@ function NodesTab({
               <span className="item-ip">{n.address}</span>
             </div>
             {n.is_hub ? (
-              <div className="item-meta"><span className="k">routes</span> 0.0.0.0/0 · the panel itself</div>
+              <>
+                <div className="item-meta"><span className="k">routes</span> 0.0.0.0/0 · the panel itself</div>
+                <div className="item-actions">
+                  <button className="ghost" onClick={() => setPickingColor(n)}>Color</button>
+                </div>
+              </>
             ) : (
               <>
                 <div className="item-meta">
@@ -291,6 +299,7 @@ function NodesTab({
                     Config
                   </button>
                   <button className="ghost" onClick={() => setRenaming(n)}>Rename</button>
+                  <button className="ghost" onClick={() => setPickingColor(n)}>Color</button>
                   <button className="danger" style={{ marginLeft: "auto" }} onClick={() => setConfirmDel(n)}>
                     Delete
                   </button>
@@ -319,6 +328,15 @@ function NodesTab({
           current={renaming.name}
           onSave={(nm) => onChange(() => api.renameNode(renaming.id, nm))}
           onClose={() => setRenaming(null)}
+        />
+      )}
+      {pickingColor && (
+        <ColorPickerModal
+          title={`Color — ${pickingColor.is_hub ? "internet exit" : pickingColor.name}`}
+          current={pickingColor.color}
+          seed={pickingColor.address || pickingColor.id}
+          onSave={(color) => onChange(() => api.setNodeColor(pickingColor.id, color))}
+          onClose={() => setPickingColor(null)}
         />
       )}
 

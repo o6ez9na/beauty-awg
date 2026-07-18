@@ -24,6 +24,7 @@ export interface Client {
   dns: string;
   enabled: boolean;
   granted_nodes: string[];
+  color: string; // "#rrggbb", or "" to fall back to the address-derived default
   online: boolean;
 }
 
@@ -90,6 +91,8 @@ export const api = {
     req<void>("PATCH", `/api/clients/${id}`, { enabled, dns }),
   renameClient: (id: string, name: string) =>
     req<void>("PATCH", `/api/clients/${id}`, { name }),
+  setClientColor: (id: string, color: string) =>
+    req<void>("PATCH", `/api/clients/${id}`, { color }),
   deleteClient: (id: string) => req<void>("DELETE", `/api/clients/${id}`),
 
   grant: (clientId: string, nodeId: string) =>

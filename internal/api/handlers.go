@@ -212,6 +212,7 @@ type updateClientReq struct {
 	Enabled *bool   `json:"enabled"`
 	DNS     *string `json:"dns"`
 	Name    *string `json:"name"`
+	Color   *string `json:"color"`
 }
 
 func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
@@ -236,6 +237,12 @@ func (s *Server) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil && req.DNS != nil {
 		if err := s.St.UpdateClient(r.Context(), id, *req.Enabled, *req.DNS); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if req.Color != nil {
+		if err := s.St.SetClientColor(r.Context(), id, *req.Color); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}

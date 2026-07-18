@@ -4,20 +4,24 @@ import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { api, Client } from "../lib/api";
 import ConfirmModal from "./ConfirmModal";
+import ColorPickerModal from "./ColorPickerModal";
 
 type View = "qr" | "conf" | "link";
 
 // Full client window: editable name + a segmented view over the QR, the raw
 // AmneziaWG .conf (view / edit / copy / download) and the native vpn:// link.
-// Reused by the clients list and the access graph.
+// Reused by the clients list and the access graph. Color lives here (not the
+// graph card) so the graph itself stays free of controls.
 export default function ClientDetails({
   client,
   onRename,
+  onColor,
   onDelete,
   onClose,
 }: {
   client: Client;
   onRename: (name: string) => void;
+  onColor: (color: string) => void;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -28,6 +32,7 @@ export default function ClientDetails({
   const [name, setName] = useState(client.name);
   const [view, setView] = useState<View>("qr");
   const [confirming, setConfirming] = useState(false);
+  const [pickingColor, setPickingColor] = useState(false);
 
   const confUrl = api.clientConfigUrl(client.id);
   const vpnUrl = api.clientVPNLinkUrl(client.id);
@@ -153,6 +158,7 @@ export default function ClientDetails({
         )}
 
         <div className="row" style={{ marginTop: 16, justifyContent: "flex-end", borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+          <button className="ghost" onClick={() => setPickingColor(true)}>Color</button>
           <button className="danger" onClick={() => setConfirming(true)}>Delete client</button>
         </div>
       </div>
@@ -163,6 +169,16 @@ export default function ClientDetails({
           body="Removes the client and revokes its access. This cannot be undone."
           onConfirm={onDelete}
           onClose={() => setConfirming(false)}
+        />
+      )}
+
+      {pickingColor && (
+        <ColorPickerModal
+          title={`Color — ${client.name}`}
+          current={client.color}
+          seed={client.address || client.id}
+          onSave={onColor}
+          onClose={() => setPickingColor(false)}
         />
       )}
     </div>
