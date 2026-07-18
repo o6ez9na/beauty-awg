@@ -53,10 +53,16 @@ func RenderNFT(hub Hub, grants []Grant, links []NodeLink) string {
 			}
 		}
 	}
-	// Site-to-site: allow each linked node's LAN to reach the peer node's LAN.
+	// Site-to-site: allow each linked node's LAN — and the node itself (its
+	// tunnel /32) — to reach the peer node's LAN. The node's own traffic sources
+	// from its tunnel IP (in the pool), so the peer node's pool->LAN masquerade
+	// handles that return path even without a static route on the peer's gateway.
 	for _, l := range links {
-		for _, src := range l.SrcSubnets {
-			for _, dst := range l.DstSubnets {
+		for _, dst := range l.DstSubnets {
+			if l.SrcAddr.IsValid() {
+				fmt.Fprintf(&b, "    ip saddr %s/32 ip daddr %s accept\n", l.SrcAddr.String(), dst.String())
+			}
+			for _, src := range l.SrcSubnets {
 				fmt.Fprintf(&b, "    ip saddr %s ip daddr %s accept\n", src.String(), dst.String())
 			}
 		}

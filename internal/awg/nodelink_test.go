@@ -75,6 +75,7 @@ func TestRenderNode_NoLinks(t *testing.T) {
 func TestRenderNFT_Links(t *testing.T) {
 	hub := testHub(t)
 	links := []NodeLink{{
+		SrcAddr:    netip.MustParseAddr("10.8.0.3"),
 		SrcSubnets: []netip.Prefix{mustPrefix(t, "10.18.18.0/24")},
 		DstSubnets: []netip.Prefix{mustPrefix(t, "192.168.1.0/24"), mustPrefix(t, "192.168.2.0/24")},
 	}}
@@ -84,6 +85,9 @@ func TestRenderNFT_Links(t *testing.T) {
 	for _, want := range []string{
 		"ip saddr 10.18.18.0/24 ip daddr 192.168.1.0/24 accept",
 		"ip saddr 10.18.18.0/24 ip daddr 192.168.2.0/24 accept",
+		// the source node itself (tunnel /32) is covered too
+		"ip saddr 10.8.0.3/32 ip daddr 192.168.1.0/24 accept",
+		"ip saddr 10.8.0.3/32 ip daddr 192.168.2.0/24 accept",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("nft missing %q:\n%s", want, got)
