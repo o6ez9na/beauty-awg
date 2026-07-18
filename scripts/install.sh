@@ -124,8 +124,16 @@ download_awg_go_binary() {
     [ -n "$url" ] || { warn "no matching amneziawg-go asset for linux/${arch}"; return 1; }
   fi
   info "downloading $url"
-  curl -fsSL "$url" -o /usr/bin/amneziawg-go || { warn "download failed"; return 1; }
-  chmod +x /usr/bin/amneziawg-go
+  # Download to a temp file + rename over the target rather than writing it in
+  # place: on an update, amneziawg-go may be running as a child of awg-quick,
+  # and the kernel refuses to open a currently-executing file for writing
+  # (ETXTBSY). rename() has no such restriction.
+  local tmp; tmp="$(mktemp /usr/bin/.amneziawg-go.XXXXXX)"
+  if ! curl -fsSL "$url" -o "$tmp"; then
+    warn "download failed"; rm -f "$tmp"; return 1
+  fi
+  chmod +x "$tmp"
+  mv -f "$tmp" /usr/bin/amneziawg-go
   # MIT requires the license notice to accompany the binary (same release path).
   mkdir -p /usr/share/doc/amneziawg-go
   curl -fsSL "${url%/*}/amneziawg-go-LICENSE" -o /usr/share/doc/amneziawg-go/LICENSE 2>/dev/null \
@@ -592,8 +600,17 @@ download_nodeagent_binary() {
     [ -n "$url" ] || { warn "no matching release asset for linux/${arch}"; return 1; }
   fi
   info "downloading $url"
-  curl -fsSL "$url" -o /usr/local/bin/awg-nodeagent || { warn "download failed"; return 1; }
-  chmod +x /usr/local/bin/awg-nodeagent
+  # Download to a temp file in the SAME dir (same filesystem) and rename over
+  # the target, rather than writing the target in place: on update the agent's
+  # own systemd service is running that exact binary, and the kernel refuses to
+  # open a currently-executing file for writing (ETXTBSY) — curl would fail
+  # with "client returned ERROR on write". rename() has no such restriction.
+  local tmp; tmp="$(mktemp /usr/local/bin/.awg-nodeagent.XXXXXX)"
+  if ! curl -fsSL "$url" -o "$tmp"; then
+    warn "download failed"; rm -f "$tmp"; return 1
+  fi
+  chmod +x "$tmp"
+  mv -f "$tmp" /usr/local/bin/awg-nodeagent
   ok "installed prebuilt node agent"
 }
 
