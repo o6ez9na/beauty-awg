@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@xyflow/react": "12.3.6",
+    "@xyflow/react": "12.11.2",
     "next": "^16.2.10",
     "qrcode.react": "4.2.0",
     "react": "19.0.0",
