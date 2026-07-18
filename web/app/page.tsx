@@ -21,6 +21,7 @@ export default function Dashboard() {
   const [tab, setTab] = useState<"nodes" | "clients">("clients");
   const [err, setErr] = useState("");
   const [modal, setModal] = useState<Modal | null>(null);
+  const [version, setVersion] = useState("");
   const [selectedClient, setSelectedClient] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -42,6 +43,10 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
+  useEffect(() => {
+    api.getVersion().then((v) => setVersion(v.version)).catch(() => {});
+  }, []);
+
   async function guard(fn: () => Promise<void>) {
     setErr("");
     try {
@@ -61,6 +66,7 @@ export default function Dashboard() {
         <div className="brand">
           <img src="/logo.svg" alt="" className="brand-logo" />
           <span>6ers3<b>rk</b></span>
+          {version && <span className="brand-version">{version}</span>}
         </div>
         <div className="meshstat">
           <span><b>{clients.length}</b> clients</span>

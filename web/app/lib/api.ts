@@ -116,6 +116,8 @@ export const api = {
   setLayout: (positions: Record<string, { x: number; y: number }>) =>
     req<void>("PUT", "/api/layout", positions),
 
+  getVersion: () => req<{ version: string }>("GET", "/api/version"),
+
   clientConfigUrl: (id: string) => `/api/clients/${id}/config`,
   clientVPNLinkUrl: (id: string) => `/api/clients/${id}/vpnlink`,
   nodeConfigUrl: (id: string) => `/api/nodes/${id}/config`,
