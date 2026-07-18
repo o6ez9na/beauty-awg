@@ -135,19 +135,28 @@ device, add a **node-to-node link** in the graph: drag an arrow from node A to
 node B. A → B means "hosts on A's LAN may initiate to B's LAN"; the reverse
 direction is a separate link (click the arrow → *Also allow B → A*).
 
-This is **pure routing, no NAT** — real source IPs are preserved. Under the hood:
+Under the hood:
 
 - each linked node carries the peer's subnets in its hub-peer `AllowedIPs` (added
   automatically to the rendered node config, so it routes cross-site traffic into
   the tunnel and WireGuard accepts the peer's source on the return path);
 - the hub's nftables ACL gets one `accept` per src×dst subnet pair; the return
-  path rides the existing `ct established` rule.
+  path rides the existing `ct established` rule;
+- cross-site traffic is **masqueraded into the destination LAN**, same as client
+  traffic — devices there see it coming from the receiving node's own LAN address,
+  not the real originating host. This is deliberate: many devices run host
+  firewalls scoped to "local subnet only" (e.g. Windows Defender's default ICMP
+  rule) and silently drop traffic from a genuinely foreign source even though
+  routing and the ACL both permit it. The trade-off is the same one client access
+  already makes — the remote LAN can't tell which of your devices made a
+  connection, only that it came from your node.
 
 Requirements / notes:
 
-- **Subnets must not overlap** between the two ends (no NAT to disambiguate). The
-  API rejects overlapping links. `192.168.1.0/24` is a common default — make sure
-  the two sites differ.
+- **Subnets must not overlap** between the two ends (AllowedIPs is cryptokey
+  routing — an overlap breaks it regardless of the NAT above). The API rejects
+  overlapping links. `192.168.1.0/24` is a common default — make sure the two
+  sites differ.
 - The **hub-exit node cannot be part of a link** (it owns `0.0.0.0/0`).
 - Both nodes' configs change when you add/remove a link. Nodes running the
   **node agent** re-pull and re-apply within ~10s automatically. For nodes whose

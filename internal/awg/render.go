@@ -80,7 +80,15 @@ const NodePrivatePlaceholder = "__REPLACE_WITH_NODE_PRIVATE_KEY__"
 // reachSubnets are the subnets of nodes this one is linked to (site-to-site).
 // They are added to the hub peer's AllowedIPs so this node routes cross-site
 // traffic into the tunnel AND WireGuard accepts the peer's cross-site source on
-// the return path. No extra NAT: node-to-node routing preserves source IPs.
+// the return path. Cross-site traffic is ALSO masqueraded into the LAN (like the
+// client pool), because devices on the LAN commonly run their own host firewalls
+// that only accept traffic from their own subnet (e.g. Windows Defender's default
+// ICMP/SMB rules scoped to "local subnet") — a foreign source is silently dropped
+// even though routing and the hub ACL both permit it. Masquerading makes
+// cross-site traffic indistinguishable from local traffic, at the cost of the
+// remote LAN no longer seeing individual source hosts (all traffic from the
+// linked site arrives as this node's own LAN address, same trade-off clients
+// already accept).
 func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	var b strings.Builder
 
@@ -99,9 +107,15 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	// which otherwise silently blocks tunnel->LAN forwarding.
 	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.ip_forward=1\n")
 	fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n", hub.PoolCIDR.String(), n.LANIface)
+	for _, s := range reachSubnets {
+		fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n", s.String(), n.LANIface)
+	}
 	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %%i -o %s -j ACCEPT\n", n.LANIface)
 	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %s -o %%i -j ACCEPT\n", n.LANIface)
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", hub.PoolCIDR.String(), n.LANIface)
+	for _, s := range reachSubnets {
+		fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", s.String(), n.LANIface)
+	}
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT\n", n.LANIface)
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -o %%i -j ACCEPT\n", n.LANIface)
 

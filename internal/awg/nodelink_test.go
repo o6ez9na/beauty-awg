@@ -28,7 +28,8 @@ func testHub(t *testing.T) Hub {
 
 // A linked node's hub-peer AllowedIPs must include the pool AND the peer node's
 // subnets, so it routes cross-site traffic into the tunnel and accepts the
-// return path. No extra NAT lines are added.
+// return path. Cross-site traffic is also masqueraded into the LAN, same as the
+// client pool, so it isn't dropped by host firewalls scoped to "local subnet".
 func TestRenderNode_ReachSubnets(t *testing.T) {
 	hub := testHub(t)
 	n := Node{
@@ -45,13 +46,19 @@ func TestRenderNode_ReachSubnets(t *testing.T) {
 	if !strings.Contains(got, "AllowedIPs = 10.8.0.0/24, 192.168.1.0/24") {
 		t.Errorf("hub-peer AllowedIPs missing linked subnet:\n%s", got)
 	}
-	// site-to-site is pure routing: the only masquerade is the pool->LAN pair
-	// (one PostUp add + one PostDown delete). No LAN->tunnel SNAT is added.
-	if strings.Count(got, "MASQUERADE") != 2 {
-		t.Errorf("expected only the pool->LAN masquerade pair, got:\n%s", got)
+	// pool->LAN pair + reachSubnet->LAN pair (one PostUp add + one PostDown
+	// delete each).
+	if strings.Count(got, "MASQUERADE") != 4 {
+		t.Errorf("expected pool + reachSubnet masquerade pairs, got:\n%s", got)
+	}
+	if !strings.Contains(got, "PostUp = iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o eth0 -j MASQUERADE") {
+		t.Errorf("missing reachSubnet masquerade PostUp:\n%s", got)
+	}
+	if !strings.Contains(got, "PostDown = iptables -t nat -D POSTROUTING -s 192.168.1.0/24 -o eth0 -j MASQUERADE") {
+		t.Errorf("missing reachSubnet masquerade PostDown:\n%s", got)
 	}
 	if strings.Contains(got, "-o %i -j MASQUERADE") {
-		t.Errorf("unexpected LAN->tunnel masquerade (should be NAT-free):\n%s", got)
+		t.Errorf("unexpected LAN->tunnel masquerade:\n%s", got)
 	}
 }
 
