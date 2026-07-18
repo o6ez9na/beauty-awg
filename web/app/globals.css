@@ -539,19 +539,6 @@ pre {
 .gnode-hub { border-color: var(--exit); background: rgba(167, 139, 250, 0.1); }
 .gnode.sel { box-shadow: 0 0 0 2px var(--signal), 0 0 22px var(--signal-dim); }
 .gnode-title { font-weight: 650; font-size: 13px; display: flex; align-items: center; gap: 6px; }
-.gnode-swatch {
-  margin-left: auto;
-  width: 13px;
-  height: 13px;
-  min-width: 13px;
-  padding: 0;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
-  cursor: pointer;
-  opacity: 0.75;
-}
-.gnode-swatch:hover { opacity: 1; }
 .gnode-sub {
   font-family: var(--mono);
   font-size: 11px;

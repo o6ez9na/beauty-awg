@@ -40,6 +40,7 @@ type ClientDTO struct {
 	DNS          string      `json:"dns"`
 	Enabled      bool        `json:"enabled"`
 	GrantedNodes []uuid.UUID `json:"granted_nodes"`
+	Color        string      `json:"color"` // "" = unset; UI derives a color from the address
 	Online       bool        `json:"online"`
 	PublicKey    string      `json:"-"`
 }
@@ -72,7 +73,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT c.id, c.name, host(c.address), c.dns, c.enabled,
-		       COALESCE(array_agg(g.node_id) FILTER (WHERE g.node_id IS NOT NULL), '{}'), c.public_key
+		       COALESCE(array_agg(g.node_id) FILTER (WHERE g.node_id IS NOT NULL), '{}'), c.color, c.public_key
 		FROM clients c
 		LEFT JOIN grants g ON g.client_id = c.id
 		GROUP BY c.id ORDER BY c.address`)
@@ -83,7 +84,7 @@ func (s *Store) ListClients(ctx context.Context) ([]ClientDTO, error) {
 	var out []ClientDTO
 	for rows.Next() {
 		var d ClientDTO
-		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.DNS, &d.Enabled, &d.GrantedNodes, &d.PublicKey); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.DNS, &d.Enabled, &d.GrantedNodes, &d.Color, &d.PublicKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -177,6 +178,16 @@ func (s *Store) UpdateClient(ctx context.Context, id uuid.UUID, enabled bool, dn
 // RenameClient sets a client's display name.
 func (s *Store) RenameClient(ctx context.Context, id uuid.UUID, name string) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE clients SET name = $2 WHERE id = $1`, id, name)
+	return err
+}
+
+// SetClientColor sets a client's display color override in the panel UI.
+// color must be "" (clears the override) or a "#rrggbb" hex string.
+func (s *Store) SetClientColor(ctx context.Context, id uuid.UUID, color string) error {
+	if color != "" && !hexColorRE.MatchString(color) {
+		return fmt.Errorf("color must be empty or #rrggbb")
+	}
+	_, err := s.Pool.Exec(ctx, `UPDATE clients SET color = $2 WHERE id = $1`, id, color)
 	return err
 }
 

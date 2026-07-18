@@ -8,11 +8,22 @@
 const SAT = 58;
 const LIGHT = 46;
 
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return h;
+// FNV-1a: better bit avalanche than a plain polynomial hash, so addresses
+// that differ by one character (e.g. neighboring IPs) don't land on
+// near-identical hues.
+function fnv1a(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0; // unsigned 32-bit
 }
+
+// The golden angle (360° * (1 - 1/φ)) spreads hues drawn from arbitrary hash
+// values roughly evenly around the wheel instead of clustering — the same
+// trick used to place points evenly without a lookup table.
+const GOLDEN_ANGLE = 137.50776405003785;
 
 export function hslToHex(h: number, s: number, l: number): string {
   s /= 100;
@@ -33,7 +44,8 @@ function hexToRgb(hex: string): [number, number, number] | null {
 
 /** Hue (0-359) a node's auto-color derives from, for seeding the picker. */
 export function hueOf(seed: string): number {
-  return ((hashString(seed) % 360) + 360) % 360;
+  const h = fnv1a(seed) * GOLDEN_ANGLE;
+  return h % 360;
 }
 
 /** Hue (0-359) of an arbitrary "#rrggbb", for seeding the picker slider from a

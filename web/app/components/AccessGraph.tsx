@@ -24,7 +24,6 @@ import RulesModal from "./RulesModal";
 import ClientDetails from "./ClientDetails";
 import RenameModal from "./RenameModal";
 import LinkModal from "./LinkModal";
-import ColorPickerModal from "./ColorPickerModal";
 import { nodeColor, readableTextColor } from "../lib/color";
 import { configChanged } from "../lib/toast";
 
@@ -44,12 +43,17 @@ function Dot({ online }: { online?: boolean }) {
   return <span className={"dot " + (online ? "live" : "")} style={{ marginRight: 7 }} />;
 }
 
+// Color is set from the Clients/Nodes settings lists, not here — the graph
+// only ever displays it, keeping the card free of extra controls.
 function ClientNodeView({ data }: NodeProps) {
-  const d = data as { label: string; sub: string; sel?: boolean; online?: boolean };
+  const d = data as { label: string; sub: string; sel?: boolean; online?: boolean; color?: string; textColor?: string };
   return (
-    <div className={"gnode gnode-client" + (d.sel ? " sel" : "")}>
+    <div
+      className={"gnode gnode-client" + (d.sel ? " sel" : "")}
+      style={{ background: d.color, color: d.textColor, borderColor: "transparent" }}
+    >
       <div className="gnode-title"><Dot online={d.online} />{d.label}</div>
-      <div className="gnode-sub">{d.sub}</div>
+      <div className="gnode-sub" style={{ color: "inherit", opacity: 0.85 }}>{d.sub}</div>
       <Handle type="source" position={Position.Right} />
     </div>
   );
@@ -57,26 +61,16 @@ function ClientNodeView({ data }: NodeProps) {
 
 function ServerNodeView({ data }: NodeProps) {
   const d = data as {
-    label: string; sub: string; hub?: boolean; online?: boolean;
-    color?: string; textColor?: string; onPickColor?: () => void;
+    label: string; sub: string; hub?: boolean; online?: boolean; color?: string; textColor?: string;
   };
   return (
     <div
       className={"gnode " + (d.hub ? "gnode-hub" : "gnode-server")}
-      style={d.hub ? undefined : { background: d.color, color: d.textColor, borderColor: "transparent" }}
+      style={{ background: d.color, color: d.textColor, borderColor: "transparent" }}
     >
       <Handle type="target" position={Position.Left} />
-      <div className="gnode-title">
-        {d.hub ? "◍ " : <Dot online={d.online} />}{d.label}
-        {!d.hub && (
-          <button
-            className="gnode-swatch"
-            title="Change node color"
-            onClick={(e) => { e.stopPropagation(); d.onPickColor?.(); }}
-          />
-        )}
-      </div>
-      <div className="gnode-sub" style={d.hub ? undefined : { color: "inherit", opacity: 0.85 }}>{d.sub}</div>
+      <div className="gnode-title">{d.hub ? "◍ " : <Dot online={d.online} />}{d.label}</div>
+      <div className="gnode-sub" style={{ color: "inherit", opacity: 0.85 }}>{d.sub}</div>
       {/* real nodes can also be a link SOURCE (drag from the right to another node) */}
       {!d.hub && <Handle type="source" position={Position.Right} />}
     </div>
@@ -104,7 +98,6 @@ export default function AccessGraph({
   const [editingLink, setEditingLink] = useState<{ src: string; dst: string } | null>(null);
   const [detailsClientId, setDetailsClientId] = useState<string | null>(null);
   const [renamingNode, setRenamingNode] = useState<{ id: string; name: string } | null>(null);
-  const [pickingColor, setPickingColor] = useState<{ id: string; name: string; color: string; seed: string } | null>(null);
   const [ready, setReady] = useState(false);
 
   // saved positions from the DB — the source of truth for reloads
@@ -130,10 +123,14 @@ export default function AccessGraph({
       return [
         ...clients.map((c) => {
           const id = cid(c.id);
+          const color = nodeColor(c);
           return {
             id, type: "client",
             position: pos(id, { x: 20, y: 24 + cn++ * 96 }),
-            data: { label: c.name, sub: c.address, sel: c.id === selectedClientId, online: c.online },
+            data: {
+              label: c.name, sub: c.address, sel: c.id === selectedClientId, online: c.online,
+              color, textColor: readableTextColor(color),
+            },
           } as RFNode;
         }),
         ...servers.map((n) => {
@@ -147,7 +144,6 @@ export default function AccessGraph({
               sub: n.is_hub ? "via panel · 0.0.0.0/0" : n.subnets.join(", "),
               hub: n.is_hub, online: n.online,
               color, textColor: readableTextColor(color),
-              onPickColor: () => setPickingColor({ id: n.id, name: n.name, color: n.color, seed: n.address || n.id }),
             },
           } as RFNode;
         }),
@@ -351,6 +347,11 @@ export default function AccessGraph({
             catch (e) { onError?.("Couldn't rename: " + String(e)); }
             onChanged();
           }}
+          onColor={async (color) => {
+            try { await api.setClientColor(detailsClient.id, color); }
+            catch (e) { onError?.("Couldn't set color: " + String(e)); }
+            onChanged();
+          }}
           onDelete={async () => {
             try { await api.deleteClient(detailsClient.id); }
             catch (e) { onError?.("Couldn't delete: " + String(e)); }
@@ -374,19 +375,6 @@ export default function AccessGraph({
         />
       )}
 
-      {pickingColor && (
-        <ColorPickerModal
-          title={`Color — ${pickingColor.name}`}
-          current={pickingColor.color}
-          seed={pickingColor.seed}
-          onSave={async (color) => {
-            try { await api.setNodeColor(pickingColor.id, color); }
-            catch (e) { onError?.("Couldn't set color: " + String(e)); }
-            onChanged();
-          }}
-          onClose={() => setPickingColor(null)}
-        />
-      )}
     </>
   );
 }
