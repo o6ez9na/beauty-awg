@@ -59,15 +59,14 @@ export default function ColorPickerModal({
             min={0}
             max={359}
             value={hue}
-            disabled={auto}
             onChange={(e) => { setHue(Number(e.target.value)); setAuto(false); }}
-            style={{ width: "100%", background: TRACK, opacity: auto ? 0.4 : 1 }}
+            style={{ width: "100%", background: TRACK, opacity: auto ? 0.6 : 1 }}
             className="hue-slider"
           />
         </div>
 
         <div className="row" style={{ marginTop: 4 }}>
-          <button className="ghost" onClick={() => setAuto(true)} disabled={auto}>
+          <button className="ghost" onClick={() => { setAuto(true); setHue(hueOf(seed)); }} disabled={auto}>
             Reset to auto-generated
           </button>
         </div>

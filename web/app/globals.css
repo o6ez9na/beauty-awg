@@ -539,6 +539,9 @@ pre {
 .gnode-hub { border-color: var(--exit); background: rgba(167, 139, 250, 0.1); }
 .gnode.sel { box-shadow: 0 0 0 2px var(--signal), 0 0 22px var(--signal-dim); }
 .gnode-title { font-weight: 650; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+/* the status dot sits on an arbitrary node color now, so ring it in the
+   card's (already-contrast-checked) text color to keep it visible. */
+.gnode .dot { border: 1px solid currentColor; }
 .gnode-sub {
   font-family: var(--mono);
   font-size: 11px;
