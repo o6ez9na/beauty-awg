@@ -83,6 +83,7 @@ type updateNodeReq struct {
 	DNS     *string   `json:"dns"`
 	Domains *[]string `json:"domains"`
 	Name    *string   `json:"name"`
+	Color   *string   `json:"color"`
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +114,12 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	if req.Domains != nil {
 		if err := s.St.SetNodeDomains(r.Context(), id, *req.Domains); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if req.Color != nil {
+		if err := s.St.SetNodeColor(r.Context(), id, *req.Color); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +28,7 @@ type NodeDTO struct {
 	IsHub     bool       `json:"is_hub"`
 	DNS       string     `json:"dns"`
 	Domains   []string   `json:"domains"`
+	Color     string     `json:"color"` // "" = unset; UI derives a color from the address
 	Online    bool       `json:"online"`
 	PublicKey string     `json:"-"`
 }
@@ -46,7 +49,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 		SELECT n.id, n.name, COALESCE(host(n.address), ''), n.lan_iface,
 		       COALESCE(array_agg(ns.subnet::text) FILTER (WHERE ns.subnet IS NOT NULL), '{}'),
 		       n.status, n.hostname, n.last_seen, n.is_hub, n.dns,
-		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id), n.public_key
+		       ARRAY(SELECT domain FROM node_domains WHERE node_id = n.id), n.color, n.public_key
 		FROM nodes n
 		LEFT JOIN node_subnets ns ON ns.node_id = n.id
 		GROUP BY n.id ORDER BY n.is_hub DESC, n.status, n.address NULLS FIRST, n.name`)
@@ -58,7 +61,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeDTO, error) {
 	for rows.Next() {
 		var d NodeDTO
 		if err := rows.Scan(&d.ID, &d.Name, &d.Address, &d.LANIface, &d.Subnets,
-			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains, &d.PublicKey); err != nil {
+			&d.Status, &d.Hostname, &d.LastSeen, &d.IsHub, &d.DNS, &d.Domains, &d.Color, &d.PublicKey); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -96,6 +99,20 @@ func (s *Store) DeleteNode(ctx context.Context, id uuid.UUID) error {
 // SetNodeDNS sets a node's DNS server (empty string clears it).
 func (s *Store) SetNodeDNS(ctx context.Context, id uuid.UUID, dns string) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE nodes SET dns = $2 WHERE id = $1`, id, dns)
+	return err
+}
+
+// hexColorRE matches a bare "#rrggbb" (lowercase or uppercase hex digits).
+var hexColorRE = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// SetNodeColor sets a node's display color override in the panel UI. color
+// must be "" (clears the override, falling back to the UI's address-derived
+// default) or a "#rrggbb" hex string.
+func (s *Store) SetNodeColor(ctx context.Context, id uuid.UUID, color string) error {
+	if color != "" && !hexColorRE.MatchString(color) {
+		return fmt.Errorf("color must be empty or #rrggbb")
+	}
+	_, err := s.Pool.Exec(ctx, `UPDATE nodes SET color = $2 WHERE id = $1`, id, color)
 	return err
 }
 
