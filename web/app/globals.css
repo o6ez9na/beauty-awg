@@ -307,6 +307,39 @@ input[type="text"]:focus, select:focus {
   box-shadow: 0 0 0 3px var(--signal-dim);
 }
 
+.hue-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.hue-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #15181f;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+.hue-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #15181f;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+}
+.hue-slider::-moz-range-track {
+  height: 12px;
+  border-radius: 999px;
+  background: transparent;
+}
+
 .addbox {
   margin-top: 14px;
   border: 1px dashed var(--line-2);
@@ -505,7 +538,20 @@ pre {
 .gnode-server { border-color: rgba(108, 235, 217, 0.35); }
 .gnode-hub { border-color: var(--exit); background: rgba(167, 139, 250, 0.1); }
 .gnode.sel { box-shadow: 0 0 0 2px var(--signal), 0 0 22px var(--signal-dim); }
-.gnode-title { font-weight: 650; font-size: 13px; }
+.gnode-title { font-weight: 650; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.gnode-swatch {
+  margin-left: auto;
+  width: 13px;
+  height: 13px;
+  min-width: 13px;
+  padding: 0;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+  cursor: pointer;
+  opacity: 0.75;
+}
+.gnode-swatch:hover { opacity: 1; }
 .gnode-sub {
   font-family: var(--mono);
   font-size: 11px;

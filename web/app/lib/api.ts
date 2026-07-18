@@ -13,6 +13,7 @@ export interface Node {
   is_hub: boolean;
   dns: string;
   domains: string[];
+  color: string; // "#rrggbb", or "" to fall back to the address-derived default
   online: boolean;
 }
 
@@ -77,6 +78,8 @@ export const api = {
     req<void>("PATCH", `/api/nodes/${id}`, { dns, domains }),
   renameNode: (id: string, name: string) =>
     req<void>("PATCH", `/api/nodes/${id}`, { name }),
+  setNodeColor: (id: string, color: string) =>
+    req<void>("PATCH", `/api/nodes/${id}`, { color }),
   approveNode: (id: string) => req<void>("POST", `/api/nodes/${id}/approve`),
   rejectNode: (id: string) => req<void>("POST", `/api/nodes/${id}/reject`),
 
