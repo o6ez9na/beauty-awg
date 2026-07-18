@@ -51,6 +51,15 @@ type Grant struct {
 	Domains    []string       // node's local domains (client-side split-DNS search domains)
 }
 
+// NodeLink is a directed site-to-site route: hosts on a source node's LAN may
+// initiate to a destination node's subnets. Rendered as hub nft accepts (one per
+// src x dst subnet pair); the return path is covered by conntrack. No NAT — real
+// source IPs are preserved, so src and dst subnets must not overlap.
+type NodeLink struct {
+	SrcSubnets []netip.Prefix // source node's LAN(s)
+	DstSubnets []netip.Prefix // destination node's LAN(s)
+}
+
 // GrantRule restricts access to a destination + optional proto/port range.
 type GrantRule struct {
 	Dest     netip.Prefix // subnet or host (/32)

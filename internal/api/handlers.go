@@ -144,12 +144,12 @@ func (s *Server) handleNodeConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	hub, node, err := s.St.GetNodeForExport(r.Context(), id)
+	hub, node, reach, err := s.St.GetNodeForExport(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	writeConf(w, node.Name, awg.RenderNode(hub, node))
+	writeConf(w, node.Name, awg.RenderNode(hub, node, reach))
 }
 
 // --- clients ---
@@ -338,6 +338,55 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.St.DeleteGrant(r.Context(), cid, nid); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.Svc.Reconcile(r.Context()); err != nil {
+		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- node-to-node links (site-to-site) ---
+
+func (s *Server) handleListNodeLinks(w http.ResponseWriter, r *http.Request) {
+	links, err := s.St.ListNodeLinks(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if links == nil {
+		links = []store.NodeLinkDTO{}
+	}
+	writeJSON(w, http.StatusOK, links)
+}
+
+func (s *Server) handleLinkNode(w http.ResponseWriter, r *http.Request) {
+	src, ok := pathUUID(w, r, "id")
+	dst, ok2 := pathUUID(w, r, "dstId")
+	if !ok || !ok2 {
+		return
+	}
+	if err := s.St.SetNodeLink(r.Context(), src, dst); err != nil {
+		// validation failures (self/hub/overlap) are client errors
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Svc.Reconcile(r.Context()); err != nil {
+		http.Error(w, "reconcile: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleUnlinkNode(w http.ResponseWriter, r *http.Request) {
+	src, ok := pathUUID(w, r, "id")
+	dst, ok2 := pathUUID(w, r, "dstId")
+	if !ok || !ok2 {
+		return
+	}
+	if err := s.St.DeleteNodeLink(r.Context(), src, dst); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

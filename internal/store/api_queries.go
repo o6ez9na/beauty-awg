@@ -169,11 +169,12 @@ func (s *Store) RenameNode(ctx context.Context, id uuid.UUID, name string) error
 	return err
 }
 
-// GetNodeForExport returns hub + one node for RenderNode.
-func (s *Store) GetNodeForExport(ctx context.Context, id uuid.UUID) (awg.Hub, awg.Node, error) {
+// GetNodeForExport returns hub + one node + its site-to-site reach subnets
+// (linked nodes' subnets) for RenderNode.
+func (s *Store) GetNodeForExport(ctx context.Context, id uuid.UUID) (awg.Hub, awg.Node, []netip.Prefix, error) {
 	hub, err := s.GetHub(ctx)
 	if err != nil {
-		return awg.Hub{}, awg.Node{}, err
+		return awg.Hub{}, awg.Node{}, nil, err
 	}
 	var n awg.Node
 	var addr string
@@ -185,7 +186,7 @@ func (s *Store) GetNodeForExport(ctx context.Context, id uuid.UUID) (awg.Hub, aw
 		WHERE n.id = $1 GROUP BY n.id`, id,
 	).Scan(&n.Name, &addr, &n.LANIface, &n.Keys.Private, &n.Keys.Public, &n.Preshared, &subnets)
 	if err != nil {
-		return awg.Hub{}, awg.Node{}, err
+		return awg.Hub{}, awg.Node{}, nil, err
 	}
 	n.Address, _ = netip.ParseAddr(addr)
 	for _, sn := range subnets {
@@ -193,7 +194,11 @@ func (s *Store) GetNodeForExport(ctx context.Context, id uuid.UUID) (awg.Hub, aw
 			n.Subnets = append(n.Subnets, p)
 		}
 	}
-	return hub, n, nil
+	reach, err := s.nodeReachSubnets(ctx, id)
+	if err != nil {
+		return awg.Hub{}, awg.Node{}, nil, err
+	}
+	return hub, n, reach, nil
 }
 
 // GetClientForExport returns hub + client + its granted subnets for RenderClient.

@@ -33,6 +33,13 @@ export interface Rule {
   port_to: number; // 0 = single (=port_from) or all
 }
 
+// NodeLink is a directed site-to-site route: hosts on node `src`'s LAN may
+// initiate to node `dst`'s subnets. A bidirectional link is two of these.
+export interface NodeLink {
+  src: string;
+  dst: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -86,6 +93,13 @@ export const api = {
     req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}`),
   revoke: (clientId: string, nodeId: string) =>
     req<void>("DELETE", `/api/clients/${clientId}/grants/${nodeId}`),
+
+  // node-to-node links (site-to-site). Directed: src's LAN may reach dst's LAN.
+  listNodeLinks: () => req<NodeLink[]>("GET", "/api/nodes/links"),
+  linkNodes: (srcId: string, dstId: string) =>
+    req<void>("PUT", `/api/nodes/${srcId}/links/${dstId}`),
+  unlinkNodes: (srcId: string, dstId: string) =>
+    req<void>("DELETE", `/api/nodes/${srcId}/links/${dstId}`),
 
   getGrantRules: (clientId: string, nodeId: string) =>
     req<Rule[]>("GET", `/api/clients/${clientId}/grants/${nodeId}/rules`),

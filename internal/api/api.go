@@ -36,6 +36,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/nodes/{id}/approve", s.requireAuth(s.handleApproveNode))
 	mux.HandleFunc("POST /api/nodes/{id}/reject", s.requireAuth(s.handleRejectNode))
 
+	// node-to-node links (site-to-site routing between spokes)
+	mux.HandleFunc("GET /api/nodes/links", s.requireAuth(s.handleListNodeLinks))
+	mux.HandleFunc("PUT /api/nodes/{id}/links/{dstId}", s.requireAuth(s.handleLinkNode))
+	mux.HandleFunc("DELETE /api/nodes/{id}/links/{dstId}", s.requireAuth(s.handleUnlinkNode))
+
 	// clients
 	mux.HandleFunc("GET /api/clients", s.requireAuth(s.handleListClients))
 	mux.HandleFunc("POST /api/clients", s.requireAuth(s.handleCreateClient))
