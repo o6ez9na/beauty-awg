@@ -71,25 +71,9 @@ pkg_install() {
 panel_installed() { [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/.env" ]; }
 # A node is "installed" once the agent's systemd unit exists.
 node_installed()  { [ -f /etc/systemd/system/awg-nodeagent.service ]; }
-# True when a pre-rename panel checkout still sits at a legacy path (migrated on
-# update; see migrate_legacy_panel).
-legacy_panel_present() {
-  local d
-  for d in $LEGACY_INSTALL_DIRS; do
-    [ "$d" = "$INSTALL_DIR" ] && continue
-    [ -d "$d/.git" ] && [ -f "$d/.env" ] && return 0
-  done
-  return 1
-}
 
 # --- mode selection --------------------------------------------------------
 MODE="${1:-${INSTALL_MODE:-}}"
-# On update, don't ask which component: reuse the mode of what's already here.
-if [ -z "$MODE" ] && [ -z "${FORCE_REINSTALL:-}" ]; then
-  if panel_installed || legacy_panel_present; then MODE=panel; info "existing panel detected — updating"
-  elif node_installed; then MODE=node; info "existing node detected — updating"
-  fi
-fi
 if [ -z "$MODE" ]; then
   echo "What do you want to install?" >/dev/tty
   echo "  1) panel  — the web panel (run on the VPS with a public IP)" >/dev/tty
@@ -482,12 +466,16 @@ update_panel() {
 
 # Migrate a pre-rename panel checkout (e.g. /opt/beautifulwg) to $INSTALL_DIR
 # WITHOUT data loss. Docker Compose derives the project name — and therefore the
-# DB volume name (e.g. beautifulwg_pgdata) — from the directory name, so after
-# moving we pin COMPOSE_PROJECT_NAME to the old name to reuse the same volume.
-# No-op when $INSTALL_DIR already exists or no legacy checkout is found. Run
-# before the panel_installed check so the migrated dir is then updated normally.
+# DB volume name (e.g. beautifulwg_pgdata) — from the directory name, so we pin
+# COMPOSE_PROJECT_NAME to the old name to reuse the same volume. Handles both:
+#   - $INSTALL_DIR doesn't exist yet: move the whole legacy checkout there.
+#   - $INSTALL_DIR already has a checkout but no .env (e.g. cloned separately):
+#     bring over just the config instead of clobbering that checkout.
+# No-op when the panel is already fully set up at $INSTALL_DIR or no legacy
+# checkout is found. Run before the panel_installed check so the result is then
+# updated normally.
 migrate_legacy_panel() {
-  [ -d "$INSTALL_DIR/.git" ] && return 0   # new location already populated
+  panel_installed && return 0   # already fully set up at the new location
   local old="" d
   for d in $LEGACY_INSTALL_DIRS; do
     [ "$d" = "$INSTALL_DIR" ] && continue
@@ -503,8 +491,17 @@ migrate_legacy_panel() {
   if command -v docker >/dev/null 2>&1; then
     ( cd "$old" && docker compose down --remove-orphans ) || warn "couldn't stop old stack; continuing"
   fi
-  mkdir -p "$(dirname "$INSTALL_DIR")"
-  mv "$old" "$INSTALL_DIR"
+
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    info "reusing existing checkout at $INSTALL_DIR; copying config from $old"
+    cp "$old/.env" "$INSTALL_DIR/.env"
+    [ -f "$old/docker-compose.ghcr.yml" ] && cp "$old/docker-compose.ghcr.yml" "$INSTALL_DIR/"
+    rm -rf "$old"
+  else
+    mkdir -p "$(dirname "$INSTALL_DIR")"
+    mv "$old" "$INSTALL_DIR"
+  fi
+
   # Pin the compose project name so the SAME DB volume (${proj}_pgdata) is reused.
   if ! grep -q '^COMPOSE_PROJECT_NAME=' "$INSTALL_DIR/.env" 2>/dev/null; then
     printf 'COMPOSE_PROJECT_NAME=%s\n' "$proj" >> "$INSTALL_DIR/.env"
