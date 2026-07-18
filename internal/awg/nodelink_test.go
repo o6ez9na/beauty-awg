@@ -71,6 +71,19 @@ func TestRenderNode_NoLinks(t *testing.T) {
 	}
 }
 
+// RenderNFT clamps spoke-to-spoke TCP MSS (MTU black-hole fix), only lowering,
+// and scopes away from the WAN iface when set.
+func TestRenderNFT_MSSClamp(t *testing.T) {
+	hub := testHub(t)
+	if got := RenderNFT(hub, nil, nil); !strings.Contains(got, "tcp option maxseg size > 1280 tcp option maxseg size set 1280") {
+		t.Errorf("expected MSS clamp in forward chain:\n%s", got)
+	}
+	hub.WANIface = "ens3"
+	if got := RenderNFT(hub, nil, nil); !strings.Contains(got, `oifname != "ens3" tcp flags syn tcp option maxseg size > 1280 tcp option maxseg size set 1280`) {
+		t.Errorf("expected WAN-scoped MSS clamp:\n%s", got)
+	}
+}
+
 // RenderNFT emits one forward-accept per src x dst subnet pair for each link.
 func TestRenderNFT_Links(t *testing.T) {
 	hub := testHub(t)

@@ -24,6 +24,18 @@ func RenderNFT(hub Hub, grants []Grant, links []NodeLink) string {
 	b.WriteString("table inet awgacl {\n")
 	b.WriteString("  chain forward {\n")
 	b.WriteString("    type filter hook forward priority filter; policy drop;\n")
+	// Clamp TCP MSS for spoke-to-spoke traffic. Client->node and node->node both
+	// traverse two AmneziaWG encapsulations (spoke->hub->spoke), so the effective
+	// path MTU is well below the tunnel's 1420. Small packets (incl. the TCP
+	// handshake) pass, but full-size data is dropped with DF set and PMTUD
+	// black-holed, so TCP stalls (e.g. web pages never load). Rewrite the SYN /
+	// SYN-ACK MSS down so both ends negotiate a segment that fits. Only lowers
+	// (guarded by size > 1280) and skips WAN-egress (internet-exit) traffic.
+	if hub.WANIface != "" {
+		fmt.Fprintf(&b, "    oifname != %q tcp flags syn tcp option maxseg size > 1280 tcp option maxseg size set 1280\n", hub.WANIface)
+	} else {
+		b.WriteString("    tcp flags syn tcp option maxseg size > 1280 tcp option maxseg size set 1280\n")
+	}
 	b.WriteString("    ct state established,related accept\n")
 	// established handles the return path, so we only emit per-grant new flows.
 	for _, g := range grants {
