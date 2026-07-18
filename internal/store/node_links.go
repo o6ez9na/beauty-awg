@@ -132,7 +132,7 @@ func (s *Store) loadNodeLinks(ctx context.Context, nodeByID map[uuid.UUID]awg.No
 		if !ok || !ok2 || len(src.Subnets) == 0 || len(dst.Subnets) == 0 {
 			continue
 		}
-		out = append(out, awg.NodeLink{SrcSubnets: src.Subnets, DstSubnets: dst.Subnets})
+		out = append(out, awg.NodeLink{SrcAddr: src.Address, SrcSubnets: src.Subnets, DstSubnets: dst.Subnets})
 	}
 	return out, rows.Err()
 }
