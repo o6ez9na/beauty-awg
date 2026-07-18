@@ -66,8 +66,30 @@ pkg_install() {
   esac
 }
 
+# --- already-installed detection -------------------------------------------
+# A panel is "installed" once its repo is cloned AND configured (.env written).
+panel_installed() { [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/.env" ]; }
+# A node is "installed" once the agent's systemd unit exists.
+node_installed()  { [ -f /etc/systemd/system/awg-nodeagent.service ]; }
+# True when a pre-rename panel checkout still sits at a legacy path (migrated on
+# update; see migrate_legacy_panel).
+legacy_panel_present() {
+  local d
+  for d in $LEGACY_INSTALL_DIRS; do
+    [ "$d" = "$INSTALL_DIR" ] && continue
+    [ -d "$d/.git" ] && [ -f "$d/.env" ] && return 0
+  done
+  return 1
+}
+
 # --- mode selection --------------------------------------------------------
 MODE="${1:-${INSTALL_MODE:-}}"
+# On update, don't ask which component: reuse the mode of what's already here.
+if [ -z "$MODE" ] && [ -z "${FORCE_REINSTALL:-}" ]; then
+  if panel_installed || legacy_panel_present; then MODE=panel; info "existing panel detected — updating"
+  elif node_installed; then MODE=node; info "existing node detected — updating"
+  fi
+fi
 if [ -z "$MODE" ]; then
   echo "What do you want to install?" >/dev/tty
   echo "  1) panel  — the web panel (run on the VPS with a public IP)" >/dev/tty
@@ -81,12 +103,6 @@ if [ -z "$MODE" ]; then
 fi
 [ "$MODE" = panel ] || [ "$MODE" = node ] || die "MODE must be panel or node (got: $MODE)"
 info "mode: $(c '1;36' "$MODE")"
-
-# --- already-installed detection -------------------------------------------
-# A panel is "installed" once its repo is cloned AND configured (.env written).
-panel_installed() { [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/.env" ]; }
-# A node is "installed" once the agent's systemd unit exists.
-node_installed()  { [ -f /etc/systemd/system/awg-nodeagent.service ]; }
 
 # --- AmneziaWG -------------------------------------------------------------
 # Built from source via DKMS so it works on Debian AND Ubuntu (the Ubuntu-only
