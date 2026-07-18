@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# beautifulwg installer.
+# 6ers3rk installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/YOURUSER/beautifulwg/main/scripts/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/YOURUSER/6ers3rk/main/scripts/install.sh | sudo bash
 #
 # Asks whether to install the PANEL (VPS hub) or a NODE (home server behind CGNAT).
 # Non-interactive:  ... | sudo bash -s -- panel      (or: node)
@@ -12,7 +12,7 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/o6ez9na/beauty-awg.git}"
 REPO_SLUG="${REPO_SLUG:-o6ez9na/beauty-awg}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/beautifulwg}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/6ers3rk}"
 PANEL_IMAGE_API="${PANEL_IMAGE_API:-ghcr.io/${REPO_SLUG}/panel-api}"
 PANEL_IMAGE_WEB="${PANEL_IMAGE_WEB:-ghcr.io/${REPO_SLUG}/panel-web}"
 AWG_IFACE="${AWG_IFACE:-awg0}"
@@ -276,7 +276,7 @@ install_awg_tools() {
 
 enable_forwarding() {
   info "enabling net.ipv4.ip_forward"
-  echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-beautifulwg.conf
+  echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-6ers3rk.conf
   # Also persist in /etc/sysctl.conf: uncomment an existing entry if present,
   # otherwise append one.
   if [ -f /etc/sysctl.conf ]; then
@@ -563,7 +563,7 @@ EOF
   fi
   cat >/etc/systemd/system/awg-nodeagent.service <<'EOF'
 [Unit]
-Description=beautifulwg node agent (enroll + config push + web editor)
+Description=6ers3rk node agent (enroll + config push + web editor)
 After=network-online.target
 Wants=network-online.target
 

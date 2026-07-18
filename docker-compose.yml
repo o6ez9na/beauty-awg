@@ -1,4 +1,4 @@
-# beautifulwg — full stack.
+# 6ers3rk — full stack.
 #
 # Topology note: `backend` runs in the HOST network namespace with NET_ADMIN so
 # it can create/manage the awg0 interface and nftables rules on the host itself.

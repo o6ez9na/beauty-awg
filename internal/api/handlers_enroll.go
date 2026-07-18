@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"net/netip"
 
-	"beautifulwg/internal/awg"
+	"6ers3rk/internal/awg"
 )
 
 // --- node-side enrollment (gated by the shared enroll secret, no cookie) ---

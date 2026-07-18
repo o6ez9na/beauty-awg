@@ -28,8 +28,9 @@ export default function LoginPage() {
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
-        <div className="brand" style={{ marginBottom: 6 }}>
-          beautiful<b style={{ color: "var(--signal)" }}>wg</b>
+        <div className="brand" style={{ marginBottom: 6, justifyContent: "center" }}>
+          <img src="/logo.svg" alt="" className="brand-logo" style={{ width: 40, height: 40 }} />
+          <span>6ers3<b style={{ color: "var(--signal)" }}>rk</b></span>
         </div>
         <p className="eyebrow">Sign in to the mesh</p>
         <div className="field" style={{ marginBottom: 12 }}>
