@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, Node, Client } from "./lib/api";
+import { api, ApiError, Node, Client, NodeLink } from "./lib/api";
 import ConfigModal from "./components/ConfigModal";
 import AccessGraph from "./components/AccessGraph";
 import ConfirmModal from "./components/ConfirmModal";
@@ -17,6 +17,7 @@ export default function Dashboard() {
   const router = useRouter();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [links, setLinks] = useState<NodeLink[]>([]);
   const [tab, setTab] = useState<"nodes" | "clients">("clients");
   const [err, setErr] = useState("");
   const [modal, setModal] = useState<Modal | null>(null);
@@ -24,9 +25,10 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [n, c] = await Promise.all([api.listNodes(), api.listClients()]);
+      const [n, c, l] = await Promise.all([api.listNodes(), api.listClients(), api.listNodeLinks()]);
       setNodes(n || []);
       setClients(c || []);
+      setLinks(l || []);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return router.push("/login");
       setErr(String(e));
@@ -98,6 +100,7 @@ export default function Dashboard() {
         <AccessGraph
           nodes={nodes}
           clients={clients}
+          links={links}
           onChanged={load}
           selectedClientId={selectedClient}
           onError={setErr}

@@ -143,16 +143,16 @@ func (s *Store) listNodes(ctx context.Context) ([]nodeRow, error) {
 }
 
 // Snapshot assembles everything RenderHub + RenderNFT need: hub, all nodes, all
-// ENABLED clients, and grants (only for enabled clients).
-func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client, []awg.Grant, error) {
+// ENABLED clients, grants (only for enabled clients), and node-to-node links.
+func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client, []awg.Grant, []awg.NodeLink, error) {
 	hub, err := s.GetHub(ctx)
 	if err != nil {
-		return awg.Hub{}, nil, nil, nil, err
+		return awg.Hub{}, nil, nil, nil, nil, err
 	}
 
 	nodeRows, err := s.listNodes(ctx)
 	if err != nil {
-		return awg.Hub{}, nil, nil, nil, err
+		return awg.Hub{}, nil, nil, nil, nil, err
 	}
 	nodes := make([]awg.Node, len(nodeRows))
 	nodeByID := map[uuid.UUID]awg.Node{}
@@ -166,7 +166,7 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 		SELECT id, name, host(address), private_key, public_key, preshared, dns
 		FROM clients WHERE enabled = true ORDER BY address`)
 	if err != nil {
-		return awg.Hub{}, nil, nil, nil, err
+		return awg.Hub{}, nil, nil, nil, nil, err
 	}
 	defer crows.Close()
 	var clients []awg.Client
@@ -176,19 +176,19 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 		var c awg.Client
 		var addr string
 		if err := crows.Scan(&id, &c.Name, &addr, &c.Keys.Private, &c.Keys.Public, &c.Preshared, &c.DNS); err != nil {
-			return awg.Hub{}, nil, nil, nil, err
+			return awg.Hub{}, nil, nil, nil, nil, err
 		}
 		c.Address, _ = netip.ParseAddr(addr)
 		clients = append(clients, c)
 		clientAddrByID[id] = c.Address
 	}
 	if err := crows.Err(); err != nil {
-		return awg.Hub{}, nil, nil, nil, err
+		return awg.Hub{}, nil, nil, nil, nil, err
 	}
 
 	rulesByGrant, err := s.loadAllGrantRules(ctx)
 	if err != nil {
-		return awg.Hub{}, nil, nil, nil, err
+		return awg.Hub{}, nil, nil, nil, nil, err
 	}
 
 	// grants for enabled clients only
@@ -197,7 +197,7 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 		FROM grants g JOIN clients c ON c.id = g.client_id
 		WHERE c.enabled = true`)
 	if err != nil {
-		return awg.Hub{}, nil, nil, nil, err
+		return awg.Hub{}, nil, nil, nil, nil, err
 	}
 	defer grows.Close()
 	var grants []awg.Grant
@@ -205,7 +205,7 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 		var cid, nid uuid.UUID
 		var exit bool
 		if err := grows.Scan(&cid, &nid, &exit); err != nil {
-			return awg.Hub{}, nil, nil, nil, err
+			return awg.Hub{}, nil, nil, nil, nil, err
 		}
 		caddr, ok := clientAddrByID[cid]
 		node, ok2 := nodeByID[nid]
@@ -222,5 +222,13 @@ func (s *Store) Snapshot(ctx context.Context) (awg.Hub, []awg.Node, []awg.Client
 			NodeDNS:    node.DNS,
 		})
 	}
-	return hub, nodes, clients, grants, grows.Err()
+	if err := grows.Err(); err != nil {
+		return awg.Hub{}, nil, nil, nil, nil, err
+	}
+
+	links, err := s.loadNodeLinks(ctx, nodeByID)
+	if err != nil {
+		return awg.Hub{}, nil, nil, nil, nil, err
+	}
+	return hub, nodes, clients, grants, links, nil
 }

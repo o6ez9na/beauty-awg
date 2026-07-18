@@ -61,12 +61,12 @@ func (s *Server) handleEnrollPoll(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{"status": status}
 	if status == "active" {
-		hub, node, err := s.St.GetNodeForExport(r.Context(), id)
+		hub, node, reach, err := s.St.GetNodeForExport(r.Context(), id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		resp["config"] = awg.RenderNode(hub, node)
+		resp["config"] = awg.RenderNode(hub, node, reach)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

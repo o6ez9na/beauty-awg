@@ -2,6 +2,7 @@ package awg
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 )
 
@@ -75,7 +76,12 @@ const NodePrivatePlaceholder = "__REPLACE_WITH_NODE_PRIVATE_KEY__"
 // RenderNode builds the static awg config installed once on a home server.
 // It NATs (masquerades) the client pool into the LAN so LAN hosts need no route
 // back. AllowedIPs for the hub peer = whole pool, so all client traffic returns.
-func RenderNode(hub Hub, n Node) string {
+//
+// reachSubnets are the subnets of nodes this one is linked to (site-to-site).
+// They are added to the hub peer's AllowedIPs so this node routes cross-site
+// traffic into the tunnel AND WireGuard accepts the peer's cross-site source on
+// the return path. No extra NAT: node-to-node routing preserves source IPs.
+func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	var b strings.Builder
 
 	priv := n.Keys.Private
@@ -105,7 +111,18 @@ func RenderNode(hub Hub, n Node) string {
 		fmt.Fprintf(&b, "PresharedKey = %s\n", n.Preshared)
 	}
 	fmt.Fprintf(&b, "Endpoint = %s\n", hub.Endpoint)
-	fmt.Fprintf(&b, "AllowedIPs = %s\n", hub.PoolCIDR.String())
+	// Pool + any linked nodes' subnets. The pool covers all client/hub return
+	// traffic; the linked subnets make this node route cross-site traffic into
+	// the tunnel and accept the peer node's source on the way back.
+	allowed := []string{hub.PoolCIDR.String()}
+	seen := map[string]bool{hub.PoolCIDR.String(): true}
+	for _, s := range reachSubnets {
+		if k := s.String(); !seen[k] {
+			seen[k] = true
+			allowed = append(allowed, k)
+		}
+	}
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", strings.Join(allowed, ", "))
 	fmt.Fprintf(&b, "PersistentKeepalive = 25\n") // punches CGNAT, keeps tunnel up
 
 	return b.String()

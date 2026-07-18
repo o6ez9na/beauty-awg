@@ -10,7 +10,11 @@ import (
 // the hub drops any forward that has no matching grant.
 //
 // Apply with: nft -f <file>  (the `flush table` line makes it idempotent).
-func RenderNFT(hub Hub, grants []Grant) string {
+//
+// links add site-to-site (node->node) accepts: one line per src x dst subnet
+// pair. The return path rides the ct established rule, so a one-way link is one
+// direction here; a bidirectional link is two NodeLinks.
+func RenderNFT(hub Hub, grants []Grant, links []NodeLink) string {
 	var b strings.Builder
 
 	// add is a no-op if the table exists; flush then clears it so the reload is
@@ -46,6 +50,14 @@ func RenderNFT(hub Hub, grants []Grant) string {
 		for _, r := range g.Rules {
 			for _, line := range nftRuleLines(g.ClientAddr.String(), r) {
 				fmt.Fprintf(&b, "    %s\n", line)
+			}
+		}
+	}
+	// Site-to-site: allow each linked node's LAN to reach the peer node's LAN.
+	for _, l := range links {
+		for _, src := range l.SrcSubnets {
+			for _, dst := range l.DstSubnets {
+				fmt.Fprintf(&b, "    ip saddr %s ip daddr %s accept\n", src.String(), dst.String())
 			}
 		}
 	}

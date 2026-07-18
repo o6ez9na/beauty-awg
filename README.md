@@ -126,6 +126,36 @@ change hot-syncs with `awg syncconf` (existing tunnels are not dropped).
    `/etc/amnezia/amneziawg/awg0.conf` and `awg-quick up awg0` (enable at boot).
 3. Grant clients access to the node with the chips in the Clients table.
 
+### Site-to-site (node → node routing)
+
+By default a node's LAN is reachable only by clients. To let a **whole LAN behind
+one node reach a LAN behind another** (e.g. every device on `10.18.18.0/24` behind
+node A reaches `192.168.1.0/24` behind node B) without installing a client on each
+device, add a **node-to-node link** in the graph: drag an arrow from node A to
+node B. A → B means "hosts on A's LAN may initiate to B's LAN"; the reverse
+direction is a separate link (click the arrow → *Also allow B → A*).
+
+This is **pure routing, no NAT** — real source IPs are preserved. Under the hood:
+
+- each linked node carries the peer's subnets in its hub-peer `AllowedIPs` (added
+  automatically to the rendered node config, so it routes cross-site traffic into
+  the tunnel and WireGuard accepts the peer's source on the return path);
+- the hub's nftables ACL gets one `accept` per src×dst subnet pair; the return
+  path rides the existing `ct established` rule.
+
+Requirements / notes:
+
+- **Subnets must not overlap** between the two ends (no NAT to disambiguate). The
+  API rejects overlapping links. `192.168.1.0/24` is a common default — make sure
+  the two sites differ.
+- The **hub-exit node cannot be part of a link** (it owns `0.0.0.0/0`).
+- Both nodes' configs change when you add/remove a link. Nodes running the
+  **node agent** re-pull and re-apply within ~10s automatically. For nodes whose
+  `.conf` was installed by hand, **re-download and re-apply** both nodes' configs.
+- On the **client-side router** (e.g. Keenetic), add a static route so LAN devices
+  send the remote subnet to node A:
+  `192.168.1.0/24 → <node-A LAN IP>` (Сеть → Маршрутизация).
+
 ## Development (no Docker)
 
 ```bash

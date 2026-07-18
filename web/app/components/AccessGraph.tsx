@@ -11,6 +11,7 @@ import {
   addEdge,
   useNodesState,
   useEdgesState,
+  MarkerType,
   type Node as RFNode,
   type Edge as RFEdge,
   type Connection,
@@ -18,11 +19,18 @@ import {
   type XYPosition,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { api, Node as VpnNode, Client } from "../lib/api";
+import { api, Node as VpnNode, Client, NodeLink } from "../lib/api";
 import RulesModal from "./RulesModal";
 import ClientDetails from "./ClientDetails";
 import RenameModal from "./RenameModal";
+import LinkModal from "./LinkModal";
 import { configChanged } from "../lib/toast";
+
+// site-to-site (node->node) edge accent, distinct from the blue grant edges.
+const LINK_COLOR = "#f0a020";
+const linkEdgeId = (src: string, dst: string) => `lnk:${src}~${dst}`;
+const isLinkEdge = (id: string) => id.startsWith("lnk:");
+const parseLinkEdge = (id: string) => id.slice(4).split("~"); // [src, dst]
 
 const cid = (id: string) => `c:${id}`;
 const nid = (id: string) => `n:${id}`;
@@ -52,6 +60,8 @@ function ServerNodeView({ data }: NodeProps) {
       <Handle type="target" position={Position.Left} />
       <div className="gnode-title">{d.hub ? "◍ " : <Dot online={d.online} />}{d.label}</div>
       <div className="gnode-sub">{d.sub}</div>
+      {/* real nodes can also be a link SOURCE (drag from the right to another node) */}
+      {!d.hub && <Handle type="source" position={Position.Right} />}
     </div>
   );
 }
@@ -59,12 +69,14 @@ function ServerNodeView({ data }: NodeProps) {
 export default function AccessGraph({
   nodes: vpnNodes,
   clients,
+  links,
   onChanged,
   selectedClientId,
   onError,
 }: {
   nodes: VpnNode[];
   clients: Client[];
+  links: NodeLink[];
   onChanged: () => void;
   selectedClientId?: string | null;
   onError?: (msg: string) => void;
@@ -72,6 +84,7 @@ export default function AccessGraph({
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<RFNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<RFEdge>([]);
   const [editing, setEditing] = useState<{ clientId: string; nodeId: string } | null>(null);
+  const [editingLink, setEditingLink] = useState<{ src: string; dst: string } | null>(null);
   const [detailsClientId, setDetailsClientId] = useState<string | null>(null);
   const [renamingNode, setRenamingNode] = useState<{ id: string; name: string } | null>(null);
   const [ready, setReady] = useState(false);
@@ -128,8 +141,20 @@ export default function AccessGraph({
         }
       }
     }
+    // Site-to-site node->node links, drawn in a distinct color with an arrowhead.
+    for (const l of links) {
+      if (servers.some((s) => s.id === l.src) && servers.some((s) => s.id === l.dst)) {
+        built_edges.push({
+          id: linkEdgeId(l.src, l.dst),
+          source: nid(l.src),
+          target: nid(l.dst),
+          style: { stroke: LINK_COLOR, strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: LINK_COLOR },
+        });
+      }
+    }
     setEdges(built_edges);
-  }, [clients, servers, selectedClientId, ready, setRfNodes, setEdges]);
+  }, [clients, servers, links, selectedClientId, ready, setRfNodes, setEdges]);
 
   // Persist positions (debounced) when the user finishes dragging.
   const persist = useCallback((nodes: RFNode[]) => {
@@ -142,26 +167,55 @@ export default function AccessGraph({
 
   const onConnect = useCallback(
     async (conn: Connection) => {
-      if (!conn.source?.startsWith("c:") || !conn.target?.startsWith("n:")) {
-        onError?.("Draw the arrow from a client to a node.");
+      // client -> node : access grant.
+      if (conn.source?.startsWith("c:") && conn.target?.startsWith("n:")) {
+        const clientId = unwrap(conn.source);
+        const nodeId = unwrap(conn.target);
+        setEdges((eds) => addEdge({ ...conn, id: `${clientId}=>${nodeId}`, animated: true }, eds));
+        try {
+          await api.grant(clientId, nodeId);
+          configChanged(clients.find((c) => c.id === clientId)?.name ?? "client");
+          onChanged();
+        } catch (e) { onError?.("Couldn't grant access: " + String(e)); onChanged(); }
         return;
       }
-      const clientId = unwrap(conn.source);
-      const nodeId = unwrap(conn.target);
-      setEdges((eds) => addEdge({ ...conn, id: `${clientId}=>${nodeId}`, animated: true }, eds));
-      try {
-        await api.grant(clientId, nodeId);
-        configChanged(clients.find((c) => c.id === clientId)?.name ?? "client");
-        onChanged();
+      // node -> node : site-to-site link (directed).
+      if (conn.source?.startsWith("n:") && conn.target?.startsWith("n:")) {
+        const srcId = unwrap(conn.source);
+        const dstId = unwrap(conn.target);
+        if (srcId === dstId) { onError?.("A node cannot link to itself."); return; }
+        setEdges((eds) => addEdge({
+          ...conn, id: linkEdgeId(srcId, dstId),
+          style: { stroke: LINK_COLOR, strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: LINK_COLOR },
+        }, eds));
+        try {
+          await api.linkNodes(srcId, dstId);
+          configChanged(servers.find((s) => s.id === srcId)?.name ?? "node");
+          onChanged();
+        } catch (e) {
+          // surface validation errors (overlap / hub / inactive) and drop the edge
+          onError?.("Couldn't link nodes: " + (e instanceof Error ? e.message : String(e)));
+          onChanged();
+        }
+        return;
       }
-      catch (e) { onError?.("Couldn't grant access: " + String(e)); onChanged(); }
+      onError?.("Draw an arrow from a client to a node, or from one node to another.");
     },
-    [setEdges, onChanged, onError, clients]
+    [setEdges, onChanged, onError, clients, servers]
   );
 
   const onEdgesDelete = useCallback(
     async (removed: RFEdge[]) => {
       for (const e of removed) {
+        if (isLinkEdge(e.id)) {
+          const [srcId, dstId] = parseLinkEdge(e.id);
+          try {
+            await api.unlinkNodes(srcId, dstId);
+            configChanged(servers.find((s) => s.id === srcId)?.name ?? "node");
+          } catch (err) { onError?.("Couldn't remove link: " + String(err)); }
+          continue;
+        }
         const [clientId, nodeId] = e.id.split("=>");
         try {
           await api.revoke(clientId, nodeId);
@@ -171,12 +225,18 @@ export default function AccessGraph({
       }
       onChanged();
     },
-    [onChanged, onError, clients]
+    [onChanged, onError, clients, servers]
   );
 
   const editServer = editing ? servers.find((s) => s.id === editing.nodeId) : null;
   const editClient = editing ? clients.find((c) => c.id === editing.clientId) : null;
   const detailsClient = detailsClientId ? clients.find((c) => c.id === detailsClientId) : null;
+
+  const linkSrc = editingLink ? servers.find((s) => s.id === editingLink.src) : null;
+  const linkDst = editingLink ? servers.find((s) => s.id === editingLink.dst) : null;
+  const linkHasReverse = editingLink
+    ? links.some((l) => l.src === editingLink.dst && l.dst === editingLink.src)
+    : false;
 
   return (
     <>
@@ -197,6 +257,11 @@ export default function AccessGraph({
           }
         }}
         onEdgeClick={(_, edge) => {
+          if (isLinkEdge(edge.id)) {
+            const [src, dst] = parseLinkEdge(edge.id);
+            setEditingLink({ src, dst });
+            return;
+          }
           const [clientId, nodeId] = edge.id.split("=>");
           setEditing({ clientId, nodeId });
         }}
@@ -211,7 +276,7 @@ export default function AccessGraph({
       </ReactFlow>
 
       <div className="stage-hint">
-        drag client → node to grant · click an arrow to edit or revoke access
+        drag client → node to grant · node → node for a site-to-site link · click an arrow to edit
       </div>
 
       {editing && editServer && editClient && (
@@ -230,6 +295,30 @@ export default function AccessGraph({
             onChanged();
           }}
           onClose={() => { setEditing(null); onChanged(); }}
+        />
+      )}
+
+      {editingLink && linkSrc && linkDst && (
+        <LinkModal
+          srcName={linkSrc.name}
+          dstName={linkDst.name}
+          hasReverse={linkHasReverse}
+          onAddReverse={async () => {
+            try { await api.linkNodes(editingLink.dst, editingLink.src); configChanged(linkDst.name); }
+            catch (e) { onError?.("Couldn't add reverse: " + (e instanceof Error ? e.message : String(e))); }
+            onChanged();
+          }}
+          onRemoveReverse={async () => {
+            try { await api.unlinkNodes(editingLink.dst, editingLink.src); configChanged(linkDst.name); }
+            catch (e) { onError?.("Couldn't remove reverse: " + String(e)); }
+            onChanged();
+          }}
+          onRemove={async () => {
+            try { await api.unlinkNodes(editingLink.src, editingLink.dst); configChanged(linkSrc.name); }
+            catch (e) { onError?.("Couldn't remove link: " + String(e)); }
+            onChanged();
+          }}
+          onClose={() => { setEditingLink(null); onChanged(); }}
         />
       )}
 

@@ -27,12 +27,12 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	hub, nodes, clients, grants, err := s.St.Snapshot(ctx)
+	hub, nodes, clients, grants, links, err := s.St.Snapshot(ctx)
 	if err != nil {
 		return err
 	}
 	hubConf := awg.RenderHub(hub, nodes, clients, grants)
-	nftRules := awg.RenderNFT(hub, grants)
+	nftRules := awg.RenderNFT(hub, grants, links)
 	if err := s.Applier.Apply(hubConf, nftRules); err != nil {
 		return err
 	}
