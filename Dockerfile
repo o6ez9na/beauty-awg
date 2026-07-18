@@ -2,11 +2,16 @@
 
 # ---- stage 1: build the Go panel ----
 FROM golang:1.26-bookworm AS gobuild
+ARG VERSION=dev
 WORKDIR /src
+# git lets `go build` stamp the binary with the commit hash (via
+# runtime/debug.BuildInfo) when VERSION isn't set, i.e. a from-source build.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/panel ./cmd/panel
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/panel ./cmd/panel
 
 # ---- stage 2: build amneziawg-tools (awg, awg-quick) ----
 FROM debian:bookworm AS awgtools

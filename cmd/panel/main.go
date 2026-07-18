@@ -11,6 +11,7 @@ import (
 
 	"6ers3rk/internal/api"
 	"6ers3rk/internal/awg"
+	"6ers3rk/internal/buildversion"
 	"6ers3rk/internal/config"
 	"6ers3rk/internal/release"
 	"6ers3rk/internal/resolver"
@@ -18,7 +19,14 @@ import (
 	"6ers3rk/internal/store"
 )
 
+// version is set at build time via -ldflags "-X main.version=vX.Y.Z" (see the
+// Dockerfile's VERSION build arg and .github/workflows/release.yml). Left as
+// "dev" for a source build; buildversion.Resolve then falls back to the git
+// commit at startup.
+var version = "dev"
+
 func main() {
+	version = buildversion.Resolve(version)
 	ctx := context.Background()
 
 	cfg, err := config.Load()
@@ -79,6 +87,7 @@ func main() {
 		Secret:        cfg.SessionSecret,
 		SecureCookies: os.Getenv("INSECURE_COOKIES") == "",
 		Release:       release.NewChecker(),
+		Version:       version,
 	}
 
 	if err := api.BootstrapAdmin(ctx, srv, os.Getenv("ADMIN_USER"), os.Getenv("ADMIN_PASSWORD")); err != nil {

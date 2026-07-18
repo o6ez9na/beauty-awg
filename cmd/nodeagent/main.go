@@ -37,12 +37,19 @@ import (
 	"time"
 
 	"6ers3rk/internal/awg"
+	"6ers3rk/internal/buildversion"
 )
 
 // version is set at build time via -ldflags "-X main.version=vX.Y.Z" (see
-// .github/workflows/release.yml). Empty/"dev" (local builds) never reports an
-// update — there's no baseline release tag to compare against.
+// .github/workflows/release.yml) and used as-is for the update check (poll's
+// ?version= param): "dev" never reports an update available, since a
+// source/dev build has no release tag to compare against.
 var version = "dev"
+
+// displayVersion is what the UI shows: version, or — for a source build —
+// the git commit buildversion.Resolve finds. Kept separate from version so a
+// git-hash "build" never gets treated as a release tag by the update check.
+var displayVersion = "dev"
 
 //go:embed index.html
 var indexHTML []byte
@@ -82,6 +89,7 @@ type agent struct {
 var a = &agent{}
 
 func main() {
+	displayVersion = buildversion.Resolve(version)
 	if st, err := loadState(); err == nil {
 		a.st = st
 	}
@@ -124,7 +132,7 @@ func getState(w http.ResponseWriter, r *http.Request) {
 		Enrolled:        a.st.Token != "",
 		Status:          a.status,
 		Panel:           a.st.Panel,
-		Version:         version,
+		Version:         displayVersion,
 		LatestVersion:   a.latestVersion,
 		UpdateAvailable: a.updateURL != "",
 	}

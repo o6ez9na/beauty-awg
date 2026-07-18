@@ -35,7 +35,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1><img src="/logo.svg" alt="" style="height:26px;vertical-align:-6px;margin-right:9px" />6ers3<span>rk</span> · node</h1>
+  <h1><img src="/logo.svg" alt="" style="height:26px;vertical-align:-6px;margin-right:9px" />6ers3<span>rk</span> · node <span id="nodeVersion" class="muted mono" style="font-size:12px;font-weight:400"></span></h1>
 
   <!-- UPDATE (shown whenever the panel reports a newer release) -->
   <div id="updateBanner" class="card hide" style="border-color:var(--accent)">
@@ -99,6 +99,8 @@ async function refresh() {
   try {
     s = await (await api("/api/state")).json();
   } catch { return; }
+
+  if (s.version) $("nodeVersion").textContent = s.version;
 
   show("updateBanner", !!s.update_available);
   if (s.update_available) {

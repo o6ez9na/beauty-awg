@@ -1,5 +1,8 @@
 web
-.git
+# .git is NOT excluded: the panel build stage reads it to stamp the binary
+# with a commit hash when built from source (no VERSION build-arg). It's
+# only present in the discarded builder stage, never copied into the final
+# image.
 *.md
 .env
 .env.*

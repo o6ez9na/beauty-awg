@@ -95,6 +95,12 @@ body::before {
   filter: drop-shadow(0 0 6px rgba(180, 0, 0, 0.45));
 }
 .brand b { color: var(--signal); font-weight: 700; }
+.brand-version {
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}
 
 .meshstat {
   display: flex;

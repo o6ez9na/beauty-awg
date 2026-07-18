@@ -16,6 +16,7 @@ type Server struct {
 	Secret        string
 	SecureCookies bool
 	Release       *release.Checker // nil disables nodeagent update notices
+	Version       string           // panel build version, shown in the web UI
 }
 
 // Routes wires the mux. Auth-protected routes go through requireAuth.
@@ -24,6 +25,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/version", s.handleVersion)
 
 	// node enrollment (secret-gated, called by node agents — no admin cookie)
 	mux.HandleFunc("POST /api/enroll", s.handleEnroll)
@@ -68,6 +70,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/clients/{id}/grants/{nodeId}/exit", s.requireAuth(s.handleSetGrantExit))
 
 	return mux
+}
+
+// handleVersion is unauthenticated (harmless, and useful on the login page too).
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": s.Version})
 }
 
 // --- helpers ---
