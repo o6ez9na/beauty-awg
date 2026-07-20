@@ -979,16 +979,61 @@ button:focus-visible, a:focus-visible, summary:focus-visible, .pickrow:focus-wit
 .stage-hint-x:hover { color: var(--text); }
 
 /* theme switch in the top bar */
-.theme-btn {
-  padding: var(--s1) var(--s3);
-  min-height: 32px;
-  font-size: 12px;
-  font-weight: 600;
-  background: transparent;
-  border-color: var(--line-2);
-  color: var(--muted);
+.themeswitch {
+  --seg: 28px;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, var(--seg));
+  padding: 3px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--ink);
+  flex: none;
 }
-.theme-btn:hover { background: var(--raise); color: var(--text); }
+/* The sliding indicator. Driven by --idx, so moving between states is one
+   transform rather than three elements fading in and out of each other. */
+.themeswitch-pill {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: var(--seg);
+  height: var(--seg);
+  border-radius: 999px;
+  background: var(--raise);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  transform: translateX(calc(var(--idx, 0) * var(--seg)));
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.themeswitch-btn {
+  position: relative;
+  width: var(--seg);
+  height: var(--seg);
+  min-height: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  border-radius: 999px;
+  color: var(--faint);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.themeswitch-btn svg { width: 15px; height: 15px; }
+.themeswitch-btn:hover { color: var(--muted); }
+.themeswitch-btn.on { color: var(--signal-text); }
+
+/* ---------- theme cross-fade ---------- */
+/* The new palette is revealed by a growing circle clipped over the old one, so
+   both frames must sit still: the browser's default cross-fade would blend the
+   two together and muddy the wipe. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) { z-index: 1; }
+::view-transition-new(root) { z-index: 9999; }
 
 /* ---------- site-to-site bus ---------- */
 /* Layers of one bundle: halo behind, body (the BaseEdge), a sheen along the

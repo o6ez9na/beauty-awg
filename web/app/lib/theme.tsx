@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useState } from "react";
 
 // Theme choice lives here rather than in CSS alone because two things outside
 // the stylesheet need the resolved value: React Flow's own `colorMode`, and the
@@ -24,6 +24,8 @@ function systemPrefersDark(): boolean {
   if (typeof window === "undefined") return true;
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
+
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 const Ctx = createContext<{
   choice: ThemeChoice;
@@ -49,7 +51,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const resolved: ResolvedTheme = choice === "system" ? (prefersDark ? "dark" : "light") : choice;
 
-  useEffect(() => {
+  // Layout effect, not a passive one: the toggle wraps the change in a view
+  // transition and needs the attribute applied inside that synchronous flush,
+  // otherwise the transition captures the old palette on both sides.
+  useIsomorphicLayoutEffect(() => {
     document.documentElement.setAttribute("data-theme", resolved);
   }, [resolved]);
 
