@@ -118,9 +118,10 @@ export const api = {
     req<void>("PUT", `/api/clients/${clientId}/grants/${nodeId}/exit`, { exit }),
 
   // config endpoints return text/plain; consumed directly as URLs for download.
-  getLayout: () => req<Record<string, { x: number; y: number }>>("GET", "/api/layout"),
-  setLayout: (positions: Record<string, { x: number; y: number }>) =>
-    req<void>("PUT", "/api/layout", positions),
+  // The blob holds node positions plus an admin-only groups key; the backend
+  // stores whatever valid JSON it is given, so the shape is owned by lib/groups.
+  getLayout: () => req<Record<string, unknown>>("GET", "/api/layout"),
+  setLayout: (blob: Record<string, unknown>) => req<void>("PUT", "/api/layout", blob),
 
   getVersion: () => req<{ version: string }>("GET", "/api/version"),
 

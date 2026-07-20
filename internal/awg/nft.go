@@ -14,8 +14,29 @@ import (
 // links add site-to-site (node->node) accepts: one line per src x dst subnet
 // pair. The return path rides the ct established rule, so a one-way link is one
 // direction here; a bidirectional link is two NodeLinks.
-func RenderNFT(hub Hub, grants []Grant, links []NodeLink) string {
+//
+// nodes is every node in the mesh, not just the granted ones: a node-exit grant
+// has to be told which destinations are internal so it does not open them.
+func RenderNFT(hub Hub, nodes []Node, grants []Grant, links []NodeLink) string {
 	var b strings.Builder
+
+	// Destinations that live inside the mesh: every node's LAN plus the client
+	// pool. "Send my internet out this node" must not also mean "give me every
+	// other site", so the node-exit accept excludes these and leaves them to the
+	// ordinary per-grant rules.
+	var mesh []string
+	for _, n := range nodes {
+		if n.IsHub {
+			continue // the hub node owns 0.0.0.0/0, which is not a LAN
+		}
+		for _, sn := range n.Subnets {
+			mesh = append(mesh, sn.String())
+		}
+	}
+	if hub.PoolCIDR.IsValid() {
+		mesh = append(mesh, hub.PoolCIDR.String())
+	}
+	meshSet := strings.Join(mesh, ", ")
 
 	// add is a no-op if the table exists; flush then clears it so the reload is
 	// atomic and idempotent.
@@ -46,11 +67,21 @@ func RenderNFT(hub Hub, grants []Grant, links []NodeLink) string {
 			continue
 		}
 		if g.NodeExit {
-			// full internet via this node: the client's default route is policy-
-			// routed into awg0, so accept all its forwarded traffic (which egresses
-			// awg0 toward the exit node; the node then masquerades to its home WAN).
-			fmt.Fprintf(&b, "    ip saddr %s accept\n", g.ClientAddr.String())
-			continue
+			// Full internet via this node: the client's default route is policy-
+			// routed into awg0, which egresses toward the exit node, and that node
+			// masquerades to its home WAN.
+			//
+			// Everything EXCEPT mesh destinations. This used to be a bare
+			// "ip saddr <client> accept", which reached every other site's LAN and
+			// silently voided the client's own per-node rules — the hub-exit branch
+			// above already guards the same hazard with its oifname match.
+			if meshSet != "" {
+				fmt.Fprintf(&b, "    ip saddr %s ip daddr != { %s } accept\n", g.ClientAddr.String(), meshSet)
+			} else {
+				fmt.Fprintf(&b, "    ip saddr %s accept\n", g.ClientAddr.String())
+			}
+			// No `continue`: this node's own subnets/rules are emitted below, so
+			// "browse the internet through home" still reaches home's own LAN.
 		}
 		if len(g.Rules) == 0 {
 			// no access level => full access to every node subnet

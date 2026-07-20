@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Modal, { ModalFooter } from "./Modal";
 
-// Rename a client or node. Saves the trimmed name; empty is rejected.
+// Rename a device or location. Saves the trimmed name; empty is rejected.
 export default function RenameModal({
   title,
   current,
@@ -24,24 +25,21 @@ export default function RenameModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ textAlign: "left" }} onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ marginTop: 0 }}>{title}</h2>
-        <div className="field">
-          <label>Name</label>
-          <input
-            type="text"
-            value={name}
-            autoFocus
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") onClose(); }}
-          />
-        </div>
-        <div className="row" style={{ marginTop: 16, justifyContent: "flex-end" }}>
-          <button className="ghost" onClick={onClose}>Cancel</button>
-          <button className="btn" onClick={save} disabled={!trimmed}>Save</button>
-        </div>
+    <Modal title={title} onClose={onClose}>
+      <div className="field">
+        <label htmlFor="rename-input">Name</label>
+        <input
+          id="rename-input"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+        />
       </div>
-    </div>
+      <ModalFooter>
+        <button className="ghost" onClick={onClose}>Cancel</button>
+        <button className="btn" onClick={save} disabled={!trimmed}>Save</button>
+      </ModalFooter>
+    </Modal>
   );
 }

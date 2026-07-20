@@ -32,7 +32,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 	hubConf := awg.RenderHub(hub, nodes, clients, grants)
-	nftRules := awg.RenderNFT(hub, grants, links)
+	nftRules := awg.RenderNFT(hub, nodes, grants, links)
 	if err := s.Applier.Apply(hubConf, nftRules); err != nil {
 		return err
 	}

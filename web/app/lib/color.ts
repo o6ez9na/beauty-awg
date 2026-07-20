@@ -1,12 +1,30 @@
-// Deterministic per-node accent color. Saturation and lightness are fixed (the
-// same values the hue slider in ColorPickerModal previews against), so every
-// node — auto or user-picked — sits in the same readable band; only hue
-// varies. readableTextColor then picks black/white text for whatever color
-// actually lands there, so contrast holds even if a stored override strays
-// outside that band.
+// A node's identity is its HUE; saturation and lightness come from the theme.
+// Storing only the hue as identity is what lets the same device look like a
+// pale chip on the white canvas and a deep one on the graphite canvas — pastels
+// that read as calm on white are glaring on dark, and a single fixed band
+// cannot serve both. readableTextColor then picks black/white text for whatever
+// the band produced, so contrast holds either way.
 
-const SAT = 58;
-const LIGHT = 46;
+export type ThemeName = "light" | "dark";
+type Band = { sat: number; light: number };
+
+const BANDS: Record<ThemeName, Band> = {
+  // LIGHT is high enough that even the darkest-perceived hue (blue, ~240deg)
+  // still clears readableTextColor's threshold, so every card lands on dark text.
+  light: { sat: 40, light: 74 },
+  // Deep and muted: on graphite these read as solid chips rather than the
+  // eye-watering pastel blocks a light-theme band produces.
+  dark: { sat: 50, light: 28 },
+};
+
+// Small dots (access chips, the wizard's pick list) sit on both white and
+// graphite surfaces, so they get one mid band that is visible against either.
+const MARK: Band = { sat: 52, light: 55 };
+
+// The canonical band a picked color is stored in. Rendering re-derives the hue
+// from it, so the stored value stays stable no matter which theme picked it.
+const SAT = BANDS.light.sat;
+const LIGHT = BANDS.light.light;
 
 // FNV-1a: better bit avalanche than a plain polynomial hash, so addresses
 // that differ by one character (e.g. neighboring IPs) don't land on
@@ -81,11 +99,38 @@ export function readableTextColor(bg: string): string {
   return luminance > 150 ? "#15181f" : "#fff";
 }
 
-/** The color to actually render: a stored override, or the deterministic
- * default derived from the node's address (falling back to id for nodes
- * without one yet, e.g. still pending). */
-export function nodeColor(node: { color: string; address: string; id: string }): string {
-  return node.color || defaultNodeColor(node.address || node.id);
+type Colorable = { color: string; address: string; id: string };
+
+/** A node's identifying hue: taken from a stored override if there is one, else
+ * derived from its address (falling back to id for nodes without one yet). */
+export function hueOfNode(node: Colorable): number {
+  return node.color ? hueFromHex(node.color) : hueOf(node.address || node.id);
+}
+
+/** The color to actually render a card in, for the theme on screen. */
+export function nodeColor(node: Colorable, theme: ThemeName = "light"): string {
+  const b = BANDS[theme];
+  return hslToHex(hueOfNode(node), b.sat, b.light);
+}
+
+/** Same identity, sized for a small dot on any surface. */
+export function markColor(node: Colorable): string {
+  return hslToHex(hueOfNode(node), MARK.sat, MARK.light);
+}
+
+/** The node's own color, pushed toward contrast so the connection point reads
+ * as part of the card but distinct from it. On dark cards that means lighter;
+ * on the light theme's pale cards, lighter would vanish into the canvas, so it
+ * goes the other way. Either way it stays the same hue. */
+export function handleColor(node: Colorable, theme: ThemeName = "light"): string {
+  const b = BANDS[theme];
+  const light = theme === "dark" ? Math.min(96, b.light + 18) : Math.max(4, b.light - 18);
+  return hslToHex(hueOfNode(node), b.sat, light);
+}
+
+/** The band a given theme renders cards in — for previewing a pick. */
+export function bandFor(theme: ThemeName): Band {
+  return BANDS[theme];
 }
 
 export const PICKER_SAT = SAT;
