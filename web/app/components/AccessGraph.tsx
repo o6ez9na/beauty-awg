@@ -58,6 +58,10 @@ const busEdgeId = (a: string, b: string) => `bus:${[a, b].sort().join("~")}`;
 const isBusEdge = (id: string) => id.startsWith("bus:");
 const parseBusEdge = (id: string) => id.slice(4).split("~"); // [a, b]
 const BUS_WIDTH = 7;
+// How long a bus takes to fold together / collapse apart. Kept in step with the
+// same timings inside BusEdge, which draws the actual frames.
+const FORM_MS = 760;
+const SPLIT_MS = 680;
 // Lighter along the top of the bundle in the dark theme, darker in the light
 // one — either way it reads as a highlight running down the trunk.
 const BUS_CORE = { dark: "#ffffff", light: "#14202b" } as const;
@@ -239,6 +243,20 @@ function Graph({
   const layout = useRef<PosMap>({});
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // A bus forming or splitting is animated instead of snapped. `pairState`
+  // remembers each location pair's last logical shape ("one" one-way link vs
+  // "bus" mutual) so the moment it changes can be caught. `busTx` holds the
+  // in-flight transitions the reconcile below reads to render the fold/unfold,
+  // and — for a split — to keep the bus on-screen until the collapse finishes.
+  const pairState = useRef<Map<string, "one" | "bus">>(new Map());
+  const pairInit = useRef(false);
+  const busTx = useRef<Map<string, { kind: "form" | "split"; start: number }>>(new Map());
+  const txTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Bumped when a transition ends, so the reconcile re-runs and lands on the
+  // final shape (bus for a form, the surviving one-way edge for a split).
+  const [animTick, setAnimTick] = useState(0);
+  useEffect(() => () => { for (const t of txTimers.current.values()) clearTimeout(t); }, []);
+
   // "devgroup", not "group": React Flow styles the built-in "group" type name,
   // which paints a stray box behind any custom component that borrows it.
   const nodeTypes = useMemo(
@@ -272,6 +290,23 @@ function Graph({
     api.setLayout(serializeLayout({ positions: layout.current, groups: groupsNow })).catch(() => {});
   }, []);
 
+  // Begin a fold (form) or collapse (split) for a location pair, and schedule
+  // its end. When it ends the transition is dropped and a reconcile is forced,
+  // so the edge settles onto its final shape.
+  const startBusTx = useCallback((busId: string, kind: "form" | "split") => {
+    if (busTx.current.has(busId)) return;
+    if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    busTx.current.set(busId, { kind, start: performance.now() });
+    const dur = kind === "form" ? FORM_MS : SPLIT_MS;
+    const prev = txTimers.current.get(busId);
+    if (prev) clearTimeout(prev);
+    txTimers.current.set(busId, setTimeout(() => {
+      busTx.current.delete(busId);
+      txTimers.current.delete(busId);
+      setAnimTick((t) => t + 1);
+    }, dur + 40));
+  }, []);
+
   // Reconcile the graph from data WITHOUT resetting positions: keep the position
   // a node already has this session (prev), else the DB layout, else a default.
   useEffect(() => {
@@ -299,7 +334,7 @@ function Graph({
     const loose = clients.filter((c) => !inGroup.has(c.id));
 
     // Relations first: which cards to fade depends on what the selection touches.
-    type Rel = { id: string; source: string; target: string; link: boolean; bus?: boolean };
+    type Rel = { id: string; source: string; target: string; link: boolean; bus?: boolean; tx?: { kind: "form" | "split"; start: number } };
     const rels: Rel[] = [];
     for (const c of loose) {
       for (const g of c.granted_nodes) {
@@ -318,15 +353,50 @@ function Graph({
     }
     const alive = (id: string) => servers.some((s) => s.id === id);
     const both = new Set(links.map((l) => `${l.src}>${l.dst}`));
+
+    // The current logical shape of each live location pair, so a change from
+    // one-way to mutual (or back) can be spotted and animated.
+    const pairNow = new Map<string, "one" | "bus">();
+    for (const l of links) {
+      if (!alive(l.src) || !alive(l.dst)) continue;
+      pairNow.set(busEdgeId(l.src, l.dst), both.has(`${l.dst}>${l.src}`) ? "bus" : "one");
+    }
+    if (!pairInit.current) {
+      // First reconcile: adopt whatever exists without animating it — buses
+      // already on the board when the page loads must not all fold in.
+      pairState.current = pairNow;
+      pairInit.current = true;
+    } else {
+      for (const [busId, shape] of pairNow) {
+        const was = pairState.current.get(busId);
+        if (was === "one" && shape === "bus") startBusTx(busId, "form");
+      }
+      for (const [busId, was] of pairState.current) {
+        // Gone to a single direction: split. Gone entirely (both removed): let
+        // it disappear — deleting a bus is a decisive act, not a fold.
+        if (was === "bus" && pairNow.get(busId) === "one") startBusTx(busId, "split");
+      }
+      pairState.current = pairNow;
+    }
+
     const drawn = new Set<string>();
     for (const l of links) {
       if (!alive(l.src) || !alive(l.dst)) continue;
+      const busId = busEdgeId(l.src, l.dst);
+      const tx = busTx.current.get(busId);
       if (both.has(`${l.dst}>${l.src}`)) {
         // Mutual: collapse the pair into a single bus, once.
-        const id = busEdgeId(l.src, l.dst);
-        if (drawn.has(id)) continue;
-        drawn.add(id);
-        rels.push({ id, source: nid(l.src), target: nid(l.dst), link: true, bus: true });
+        if (drawn.has(busId)) continue;
+        drawn.add(busId);
+        rels.push({ id: busId, source: nid(l.src), target: nid(l.dst), link: true, bus: true, tx });
+        continue;
+      }
+      if (tx?.kind === "split") {
+        // One direction left, but a collapse is still playing: hold the bus on
+        // screen (and suppress the one-way edge) until it finishes.
+        if (drawn.has(busId)) continue;
+        drawn.add(busId);
+        rels.push({ id: busId, source: nid(l.src), target: nid(l.dst), link: true, bus: true, tx });
         continue;
       }
       rels.push({ id: linkEdgeId(l.src, l.dst), source: nid(l.src), target: nid(l.dst), link: true });
@@ -456,7 +526,7 @@ function Graph({
           return r.link
             ? {
                 id: r.id, source: r.source, target: r.target,
-                ...(r.bus ? { type: "bus", data: { highlight: BUS_CORE[resolved] } } : {}),
+                ...(r.bus ? { type: "bus", data: { highlight: BUS_CORE[resolved], transition: r.tx } } : {}),
                 style: { stroke: LINK_COLOR, strokeWidth: width },
                 markerEnd: r.bus ? undefined : { type: MarkerType.ArrowClosed, color: LINK_COLOR },
               }
@@ -471,7 +541,7 @@ function Graph({
           const accent = colorOf.get(other) ?? LINK_COLOR;
           return {
             id: r.id, source: r.source, target: r.target,
-            ...(r.bus ? { type: "bus", data: { highlight: BUS_CORE[resolved] } } : {}),
+            ...(r.bus ? { type: "bus", data: { highlight: BUS_CORE[resolved], transition: r.tx } } : {}),
             animated: !r.link,
             zIndex: 10,
             style: { stroke: accent, strokeWidth: r.bus ? BUS_WIDTH + 1 : 4 },
@@ -504,7 +574,7 @@ function Graph({
       edgeSig.current = sig;
       setEdges(built);
     }
-  }, [clients, servers, links, groups, selectedId, connectingFrom, resolved, ready, setRfNodes, setEdges]);
+  }, [clients, servers, links, groups, selectedId, connectingFrom, resolved, ready, animTick, startBusTx, setRfNodes, setEdges]);
 
   // Persist positions (debounced) when the user finishes dragging.
   const persist = useCallback((nodes: RFNode[]) => {
