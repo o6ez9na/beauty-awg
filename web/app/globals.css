@@ -405,6 +405,11 @@ body::before {
 }
 .achip.on { border-color: var(--signal); background: var(--signal-dim); }
 .achip.busy { opacity: 0.55; }
+/* Group-managed: shown for information, edited on the map. Reads as static, not
+   clickable, and drops the pointer affordances. */
+.achip.locked { border-style: dashed; }
+.achip.locked .achip-main { cursor: default; }
+.access-none-inline { align-self: center; font-size: 13px; color: var(--muted); }
 
 .achip-main {
   display: inline-flex;

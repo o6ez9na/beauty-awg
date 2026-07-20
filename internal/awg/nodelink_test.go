@@ -46,10 +46,18 @@ func TestRenderNode_ReachSubnets(t *testing.T) {
 	if !strings.Contains(got, "AllowedIPs = 10.8.0.0/24, 192.168.1.0/24") {
 		t.Errorf("hub-peer AllowedIPs missing linked subnet:\n%s", got)
 	}
-	// pool->LAN pair + reachSubnet->LAN pair (one PostUp add + one PostDown
-	// delete each).
+	// pool pair (tunnel-excluded, so it also covers internet-exit egress) +
+	// reachSubnet->LAN pair (one PostUp add + one PostDown delete each).
 	if strings.Count(got, "MASQUERADE") != 4 {
 		t.Errorf("expected pool + reachSubnet masquerade pairs, got:\n%s", got)
+	}
+	// The pool masquerade is scoped away from the tunnel (`! -o %i`), never bound
+	// to the LAN iface, so exit traffic egressing a non-LAN WAN iface is covered.
+	if !strings.Contains(got, "PostUp = iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -o %i -j MASQUERADE") {
+		t.Errorf("missing tunnel-excluded pool masquerade PostUp:\n%s", got)
+	}
+	if !strings.Contains(got, "PostDown = iptables -t nat -D POSTROUTING -s 10.8.0.0/24 ! -o %i -j MASQUERADE") {
+		t.Errorf("missing tunnel-excluded pool masquerade PostDown:\n%s", got)
 	}
 	if !strings.Contains(got, "PostUp = iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -o eth0 -j MASQUERADE") {
 		t.Errorf("missing reachSubnet masquerade PostUp:\n%s", got)
@@ -57,8 +65,11 @@ func TestRenderNode_ReachSubnets(t *testing.T) {
 	if !strings.Contains(got, "PostDown = iptables -t nat -D POSTROUTING -s 192.168.1.0/24 -o eth0 -j MASQUERADE") {
 		t.Errorf("missing reachSubnet masquerade PostDown:\n%s", got)
 	}
-	if strings.Contains(got, "-o %i -j MASQUERADE") {
-		t.Errorf("unexpected LAN->tunnel masquerade:\n%s", got)
+	// The pool must never be masqueraded straight back out the tunnel (that would
+	// rewrite LAN source IPs toward clients); the only %i reference is the `!`
+	// exclusion above.
+	if strings.Contains(got, "POSTROUTING -s 10.8.0.0/24 -o %i -j MASQUERADE") {
+		t.Errorf("unexpected pool->tunnel masquerade:\n%s", got)
 	}
 }
 

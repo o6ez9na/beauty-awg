@@ -13,17 +13,22 @@ import { humanError } from "../lib/errors";
 export default function AccessPicker({
   client,
   locations,
+  groupName,
   onChanged,
   onError,
   onEditRules,
 }: {
   client: Client;
   locations: Node[];
+  /** Set when the device is in a group: its access is the group's, so it is
+   *  shown read-only here and edited on the map instead. */
+  groupName?: string;
   onChanged: () => void;
   onError: (msg: string) => void;
   onEditRules?: (nodeId: string) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const managed = groupName !== undefined;
 
   async function toggle(node: Node, granted: boolean) {
     setBusy(node.id);
@@ -51,25 +56,31 @@ export default function AccessPicker({
   return (
     <div className="access">
       <p className="access-label" id={`access-${client.id}`}>
-        Can reach
+        {managed ? `Can reach — managed by group “${groupName}”` : "Can reach"}
       </p>
       <div className="access-chips" role="group" aria-labelledby={`access-${client.id}`}>
         {locations.map((n) => {
           const granted = client.granted_nodes.includes(n.id);
           const label = n.is_hub ? "The internet" : n.name;
           const working = busy === n.id;
+          // A grouped device's access follows its group. Show what it reaches but
+          // don't offer to change it here — the toggle would only drift it away
+          // from the group until the next sync pulls it back. Edit it on the map.
+          if (managed && !granted) return null; // don't advertise ungranted ones read-only
           return (
-            <span key={n.id} className={"achip" + (granted ? " on" : "") + (working ? " busy" : "")}>
+            <span key={n.id} className={"achip" + (granted ? " on" : "") + (working ? " busy" : "") + (managed ? " locked" : "")}>
               <button
                 type="button"
                 className="achip-main"
                 aria-pressed={granted}
-                disabled={working}
-                onClick={() => toggle(n, granted)}
+                disabled={working || managed}
+                onClick={() => { if (!managed) toggle(n, granted); }}
                 title={
-                  n.is_hub
-                    ? "Send this device's internet traffic through the server"
-                    : `Local network: ${n.subnets.join(", ") || "not set"}`
+                  managed
+                    ? `Managed by group “${groupName}” — edit access on the map`
+                    : n.is_hub
+                      ? "Send this device's internet traffic through the server"
+                      : `Local network: ${n.subnets.join(", ") || "not set"}`
                 }
               >
                 <span
@@ -81,7 +92,7 @@ export default function AccessPicker({
                 </span>
                 <span className="achip-name">{label}</span>
               </button>
-              {granted && !n.is_hub && onEditRules && (
+              {!managed && granted && !n.is_hub && onEditRules && (
                 <button
                   type="button"
                   className="achip-gear"
@@ -95,6 +106,9 @@ export default function AccessPicker({
             </span>
           );
         })}
+        {managed && client.granted_nodes.length === 0 && (
+          <span className="access-none-inline">Group grants no access yet</span>
+        )}
       </div>
     </div>
   );

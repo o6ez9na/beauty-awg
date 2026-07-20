@@ -10,6 +10,7 @@ import EmptyState from "./EmptyState";
 export default function DevicesView({
   clients,
   locations,
+  groupNameByClient,
   onChange,
   onError,
   onOpen,
@@ -18,6 +19,8 @@ export default function DevicesView({
 }: {
   clients: Client[];
   locations: Node[];
+  /** clientId -> group name, for devices whose access is managed by a group. */
+  groupNameByClient: Map<string, string>;
   onChange: (fn: () => Promise<void>) => void;
   onError: (msg: string) => void;
   onOpen: (client: Client) => void;
@@ -58,6 +61,7 @@ export default function DevicesView({
           <AccessPicker
             client={c}
             locations={locations}
+            groupName={groupNameByClient.get(c.id)}
             onChanged={() => onChange(async () => {})}
             onError={onError}
             onEditRules={(nodeId) => onEditRules(c.id, nodeId)}
