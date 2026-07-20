@@ -100,24 +100,37 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	fmt.Fprintf(&b, "Address = %s/32\n", n.Address.String())
 	fmt.Fprintf(&b, "PrivateKey = %s\n", priv)
 	b.WriteString(paramsBlock(hub.Params))
-	// Forward + masquerade pool -> LAN. awg-quick runs PostUp/PostDown; %i
-	// expands to the awg interface name (e.g. awg0). The explicit FORWARD
-	// accepts are required because Docker (typically present on a LAN node,
-	// since the panel runs in containers) flips the FORWARD policy to DROP,
-	// which otherwise silently blocks tunnel->LAN forwarding.
+	// Forward + masquerade the client pool. awg-quick runs PostUp/PostDown; %i
+	// expands to the awg interface name (e.g. awg0). The explicit FORWARD accepts
+	// are required because Docker (typically present on a LAN node, since the panel
+	// runs in containers) flips the FORWARD policy to DROP, which otherwise
+	// silently blocks tunnel forwarding.
+	//
+	// The pool masquerade and the FORWARD accepts are scoped by "not the tunnel"
+	// (`! -o %i`) rather than by the LAN interface. Pool-sourced packets only ever
+	// egress a physical interface — the LAN for on-net services, or the default
+	// route (WAN) when this node is an internet-exit — never back out the tunnel,
+	// so excluding the tunnel is enough and, unlike `-o <LAN>`, it also covers
+	// exit traffic on a node whose internet-facing interface differs from its LAN
+	// one. On the common single-NIC home server the two are identical, so this is
+	// a superset that changes nothing there. The hub's nftables ACL is still the
+	// authority on what may be forwarded at all.
 	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.ip_forward=1\n")
-	fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n", hub.PoolCIDR.String(), n.LANIface)
+	fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n", hub.PoolCIDR.String())
+	// Cross-site (linked-node) traffic is masqueraded INTO the LAN specifically, so
+	// remote hosts see this node's LAN address (host firewalls scoped to "local
+	// subnet" then accept it). That intent is LAN-only, so it keeps -o <LAN>.
 	for _, s := range reachSubnets {
 		fmt.Fprintf(&b, "PostUp = iptables -t nat -A POSTROUTING -s %s -o %s -j MASQUERADE\n", s.String(), n.LANIface)
 	}
-	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %%i -o %s -j ACCEPT\n", n.LANIface)
-	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %s -o %%i -j ACCEPT\n", n.LANIface)
-	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", hub.PoolCIDR.String(), n.LANIface)
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %%i ! -o %%i -j ACCEPT\n")
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD ! -i %%i -o %%i -j ACCEPT\n")
+	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n", hub.PoolCIDR.String())
 	for _, s := range reachSubnets {
 		fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", s.String(), n.LANIface)
 	}
-	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i -o %s -j ACCEPT\n", n.LANIface)
-	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -o %%i -j ACCEPT\n", n.LANIface)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %%i ! -o %%i -j ACCEPT\n")
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD ! -i %%i -o %%i -j ACCEPT\n")
 
 	fmt.Fprintf(&b, "\n# hub\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.Keys.Public)

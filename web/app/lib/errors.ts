@@ -5,13 +5,23 @@
 
 import { ApiError } from "./api";
 
-type Match = { test: RegExp; message: string };
+// message is either a fixed sentence or a builder that can weave in captured
+// groups from the regex (e.g. the name of the location that is already the exit),
+// so the advice can point at the exact thing to change.
+type Match = { test: RegExp; message: string | ((m: RegExpMatchArray) => string) };
 
 const MATCHES: Match[] = [
   {
     test: /subnets overlap \(([^)]*)\)/i,
     message:
       "These two locations use the same local network range, so traffic can't tell them apart. Change one router's range (for example from 192.168.1.x to 192.168.5.x) and try again.",
+  },
+  {
+    // The backend names the location that currently holds the exit; keep that
+    // name so the fix ("turn it off there") is one unambiguous click, not a hunt.
+    test: /node "([^"]+)" is already the internet exit/i,
+    message: (m) =>
+      `Only one location can send all traffic at a time, and “${m[1]}” already does. Turn that off on “${m[1]}” first, then switch it on here.`,
   },
   {
     test: /already the internet exit/i,
@@ -59,7 +69,8 @@ export function humanError(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
 
   for (const m of MATCHES) {
-    if (m.test.test(raw)) return m.message;
+    const hit = raw.match(m.test);
+    if (hit) return typeof m.message === "function" ? m.message(hit) : m.message;
   }
 
   if (e instanceof ApiError) {

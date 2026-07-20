@@ -41,19 +41,33 @@ export default function RulesModal({
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  // The first member stands for the group: membership keeps their access in
-  // step, so any of them describes the whole.
+  // The first member stands for the group's limits: membership keeps their
+  // access in step, so any of them describes the rule list.
   const lead = clientIds[0];
+  // Stable dep: the array identity changes every render (callers pass fresh
+  // literals like [id]), so key the load off the contents, not the reference.
+  const idsKey = clientIds.join(",");
 
   useEffect(() => {
     if (!lead) return;
+    const ids = idsKey.split(",");
     api
       .getGrantRules(lead, nodeId)
       .then((r) => setRules(r || []))
       .catch((e) => setErr(humanError(e)))
       .finally(() => setLoaded(true));
-    api.getGrantExit(lead, nodeId).then((r) => setExit(r.exit)).catch(() => {});
-  }, [lead, nodeId]);
+    // The exit switch reads EVERY member, not just the lead: it shows "on" only
+    // when the whole group already exits here. A half-applied group (some members
+    // exiting, some not) then reads as off, and saving brings them all into line —
+    // reading the lead alone would instead paint a group as done while members
+    // silently still browse from their own connection. A member missing the grant
+    // outright counts as not exiting.
+    Promise.all(
+      ids.map((id) => api.getGrantExit(id, nodeId).then((r) => r.exit).catch(() => false))
+    )
+      .then((flags) => setExit(flags.length > 0 && flags.every(Boolean)))
+      .catch(() => {});
+  }, [lead, nodeId, idsKey]);
 
   const hasCatchAll = rules.some((r) => r.dest.trim() === CATCH_ALL);
 

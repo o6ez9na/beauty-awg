@@ -622,6 +622,24 @@ function Graph({
     try {
       for (const nodeId of add) await api.grant(client.id, nodeId);
       for (const nodeId of remove) await api.revoke(client.id, nodeId);
+      // syncPlan only lined up WHICH locations the device reaches. Line up HOW it
+      // reaches each one too — the "browse the internet through here" exit switch
+      // and any per-address limits — so a member inherits the whole of the group's
+      // access, not just its shape. Without this a device joins reachable-but-not-
+      // exiting: it sees the location's LAN yet its internet never leaves through
+      // it. Copy from an existing member that already holds the grant (members are
+      // kept in step, so any of them is authoritative); a location brand-new to
+      // the group has no source, and its defaults (no exit, no limits) are right.
+      for (const nodeId of target) {
+        const rep = group.members.find((m) => (grantsByClient.get(m) ?? []).includes(nodeId));
+        if (!rep) continue;
+        const [{ exit }, rules] = await Promise.all([
+          api.getGrantExit(rep, nodeId),
+          api.getGrantRules(rep, nodeId),
+        ]);
+        await api.setGrantExit(client.id, nodeId, exit);
+        await api.setGrantRules(client.id, nodeId, rules || []);
+      }
       const nameOf = (id: string) => {
         const n = servers.find((x) => x.id === id);
         return n ? (n.is_hub ? "the internet" : n.name) : "a location";

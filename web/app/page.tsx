@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, Node, Client, NodeLink } from "./lib/api";
 import { humanError } from "./lib/errors";
+import { parseLayout, Group } from "./lib/groups";
 import ConfigModal from "./components/ConfigModal";
 import AccessGraph from "./components/AccessGraph";
 import ClientDetails from "./components/ClientDetails";
@@ -30,6 +31,11 @@ export default function Dashboard() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [links, setLinks] = useState<NodeLink[]>([]);
+  // Groups live in the graph-layout blob (see lib/groups). The device list needs
+  // them so a grouped device shows its access as group-managed and read-only —
+  // its grants follow the group, so editing them one device at a time would just
+  // drift them back apart.
+  const [groups, setGroups] = useState<Group[]>([]);
   const [tab, setTab] = useState<Tab>("devices");
   // Nothing of the panel is rendered until the first load comes back. A stale
   // cookie gets past the middleware, and painting the dashboard before finding
@@ -46,10 +52,16 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [n, c, l] = await Promise.all([api.listNodes(), api.listClients(), api.listNodeLinks()]);
+      const [n, c, l, layout] = await Promise.all([
+        api.listNodes(),
+        api.listClients(),
+        api.listNodeLinks(),
+        api.getLayout().catch(() => ({})), // layout is optional; a fresh panel has none
+      ]);
       setNodes(n || []);
       setClients(c || []);
       setLinks(l || []);
+      setGroups(parseLayout(layout).groups);
       setErr("");
       setReady(true);
     } catch (e) {
@@ -96,6 +108,11 @@ export default function Dashboard() {
     },
     [load]
   );
+
+  // clientId -> the name of the group it belongs to, for the device list to mark
+  // its access group-managed. Editing groups themselves stays on the map.
+  const groupNameByClient = new Map<string, string>();
+  for (const g of groups) for (const m of g.members) groupNameByClient.set(m, g.name);
 
   const activeNodes = nodes.filter((n) => n.status === "active");
   const homeNodes = activeNodes.filter((n) => !n.is_hub);
@@ -177,6 +194,7 @@ export default function Dashboard() {
             <DevicesView
               clients={clients}
               locations={activeNodes}
+              groupNameByClient={groupNameByClient}
               onChange={guard}
               onError={setErr}
               onOpen={(c) => setOpenDeviceId(c.id)}
