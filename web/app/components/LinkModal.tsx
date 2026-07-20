@@ -1,7 +1,10 @@
 "use client";
 
-// Editor for a directed site-to-site link (node -> node). Shows the direction,
-// lets you add/remove the reverse direction, or remove the link entirely.
+import Modal, { ModalFooter } from "./Modal";
+
+// Editor for a directed link between two locations. Site-to-site is genuinely
+// an advanced feature, so the copy explains what the direction means in terms
+// of "the devices at each place" rather than subnets and initiators.
 export default function LinkModal({
   srcName,
   dstName,
@@ -20,31 +23,37 @@ export default function LinkModal({
   onClose: () => void;
 }) {
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" style={{ textAlign: "left" }} onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ marginTop: 0 }}>Site-to-site link</h2>
-        <p className="mono" style={{ marginTop: -6 }}>
-          <b>{srcName}</b>&rsquo;s LAN can reach <b>{dstName}</b>&rsquo;s LAN.
-          {hasReverse
-            ? " The reverse direction is also allowed."
-            : " Traffic can only be initiated in this direction (replies return automatically)."}
-        </p>
-        <div className="row" style={{ marginTop: 16, justifyContent: "space-between" }}>
-          {hasReverse ? (
-            <button className="ghost" onClick={() => { onRemoveReverse(); onClose(); }}>
-              Remove reverse ({dstName} → {srcName})
-            </button>
-          ) : (
-            <button className="ghost" onClick={() => { onAddReverse(); onClose(); }}>
-              Also allow {dstName} → {srcName}
-            </button>
-          )}
-          <div className="row" style={{ gap: 8 }}>
-            <button className="ghost" onClick={onClose}>Close</button>
-            <button className="danger" onClick={() => { onRemove(); onClose(); }}>Remove link</button>
-          </div>
-        </div>
+    <Modal
+      title="Link between two locations"
+      subtitle={`${srcName} → ${dstName}`}
+      onClose={onClose}
+    >
+      <p className="prose">
+        Everything on <b>{srcName}</b>&rsquo;s network can open connections to everything on{" "}
+        <b>{dstName}</b>&rsquo;s network — no app needed on the individual devices.
+      </p>
+      <p className="prose">
+        {hasReverse
+          ? `${dstName} can start connections back the other way too.`
+          : `${dstName} can reply, but can't start a connection of its own.`}
+      </p>
+
+      <div className="stack">
+        {hasReverse ? (
+          <button className="ghost" onClick={() => { onRemoveReverse(); onClose(); }}>
+            Stop {dstName} starting connections to {srcName}
+          </button>
+        ) : (
+          <button className="ghost" onClick={() => { onAddReverse(); onClose(); }}>
+            Also let {dstName} start connections to {srcName}
+          </button>
+        )}
       </div>
-    </div>
+
+      <ModalFooter>
+        <button className="ghost" onClick={onClose}>Close</button>
+        <button className="danger" onClick={() => { onRemove(); onClose(); }}>Remove link</button>
+      </ModalFooter>
+    </Modal>
   );
 }

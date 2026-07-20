@@ -13,6 +13,11 @@ WORKDIR /app
 # the backend URL must be present here, not just at runtime.
 ARG BACKEND_URL=http://localhost:8080
 ENV BACKEND_URL=$BACKEND_URL
+# Build identifier shown in the UI. CI passes the release tag; a from-source
+# build passes the git rev (+ "-dirty"), mirroring internal/buildversion on the
+# Go side. NEXT_PUBLIC_ is inlined into the client bundle at build time.
+ARG VERSION=dev
+ENV NEXT_PUBLIC_APP_VERSION=$VERSION
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

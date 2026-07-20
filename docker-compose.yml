@@ -29,6 +29,10 @@ services:
       context: .
       dockerfile: Dockerfile
       network: host
+      args:
+        # Shown in the UI. Set API_VERSION to a tag or git rev when building
+        # from source: API_VERSION=$(git describe --tags --always --dirty)
+        VERSION: ${API_VERSION:-dev}
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -77,6 +81,9 @@ services:
       args:
         # Baked into next rewrites at build time (see web/Dockerfile).
         BACKEND_URL: http://localhost:8080
+        # Shown in the UI. Set WEB_VERSION to a tag or git rev when building
+        # from source: WEB_VERSION=$(git describe --tags --always --dirty)
+        VERSION: ${WEB_VERSION:-dev}
     network_mode: host
     environment:
       BACKEND_URL: http://localhost:8080

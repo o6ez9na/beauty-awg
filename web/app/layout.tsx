@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ThemeProvider, THEME_BOOT_SCRIPT } from "./lib/theme";
 
 export const metadata: Metadata = {
   title: "6ers3rk — AmneziaWG panel",
@@ -16,8 +17,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    // The boot script sets data-theme before hydration, so the server markup
+    // deliberately differs from what the browser has by then.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

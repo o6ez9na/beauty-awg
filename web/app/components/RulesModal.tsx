@@ -3,11 +3,20 @@
 import { useEffect, useState } from "react";
 import { api, Rule } from "../lib/api";
 import { configChanged } from "../lib/toast";
+import { humanError } from "../lib/errors";
+import Modal, { ModalFooter } from "./Modal";
 
-// Editor for a grant's access level: destination subnets/hosts + optional ports.
-// No rules = full access to all the node's subnets.
+// Typing this as a destination means "everything", which is what the exit
+// toggle already expresses — so it flips the toggle instead of standing as a
+// rule of its own.
+const CATCH_ALL = "0.0.0.0/0";
+
+// Narrows one device's access at one location down to specific addresses and
+// ports. Empty list = the whole network, which is the common case, so the
+// screen leads with that fact instead of an empty table.
+
 export default function RulesModal({
-  clientId,
+  clientIds,
   nodeId,
   clientName,
   nodeName,
@@ -15,7 +24,10 @@ export default function RulesModal({
   onClose,
   onRevoke,
 }: {
-  clientId: string;
+  /** One device, or every member of a group. The editor reads the first one and
+   *  writes the result to all of them, which is what makes a group's single line
+   *  editable at all. */
+  clientIds: string[];
   nodeId: string;
   clientName: string;
   nodeName: string;
@@ -29,23 +41,33 @@ export default function RulesModal({
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  // The first member stands for the group: membership keeps their access in
+  // step, so any of them describes the whole.
+  const lead = clientIds[0];
+
   useEffect(() => {
+    if (!lead) return;
     api
-      .getGrantRules(clientId, nodeId)
+      .getGrantRules(lead, nodeId)
       .then((r) => setRules(r || []))
-      .catch((e) => setErr(String(e)))
+      .catch((e) => setErr(humanError(e)))
       .finally(() => setLoaded(true));
-    api.getGrantExit(clientId, nodeId).then((r) => setExit(r.exit)).catch(() => {});
-  }, [clientId, nodeId]);
+    api.getGrantExit(lead, nodeId).then((r) => setExit(r.exit)).catch(() => {});
+  }, [lead, nodeId]);
+
+  const hasCatchAll = rules.some((r) => r.dest.trim() === CATCH_ALL);
+
+  // Reaching 0.0.0.0/0 and routing all traffic through the location are the same
+  // request, so entering one turns on the other.
+  useEffect(() => {
+    if (hasCatchAll) setExit(true);
+  }, [hasCatchAll]);
 
   function update(i: number, patch: Partial<Rule>) {
     setRules((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
   function addRule() {
-    setRules((rs) => [
-      ...rs,
-      { dest: subnetHints[0] || "", proto: "any", port_from: 0, port_to: 0 },
-    ]);
+    setRules((rs) => [...rs, { dest: subnetHints[0] || "", proto: "any", port_from: 0, port_to: 0 }]);
   }
   function removeRule(i: number) {
     setRules((rs) => rs.filter((_, j) => j !== i));
@@ -55,135 +77,144 @@ export default function RulesModal({
     setBusy(true);
     setErr("");
     try {
-      // Exit first: it enforces the single-exit-node invariant and may reject.
-      await api.setGrantExit(clientId, nodeId, exit);
-      await api.setGrantRules(clientId, nodeId, rules);
+      // A catch-all alongside the exit flag would add a redundant, contradictory
+      // accept to the ACL, so drop it — the toggle now carries that meaning.
+      // Narrower rules are kept: they come back when the exit is turned off.
+      const toSave = exit ? rules.filter((r) => r.dest.trim() !== CATCH_ALL) : rules;
+      for (const id of clientIds) {
+        // Exit first: it enforces the single-exit-location rule and may reject.
+        await api.setGrantExit(id, nodeId, exit);
+        await api.setGrantRules(id, nodeId, toSave);
+      }
       configChanged(clientName);
       onClose();
     } catch (e) {
-      setErr(String(e));
+      setErr(humanError(e));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal"
-        style={{ width: 560, textAlign: "left" }}
-        onClick={(e) => e.stopPropagation()}
+    <Modal
+      title={`${clientName} at ${nodeName}`}
+      subtitle="Choose how much of this location the device is allowed to see."
+      size="lg"
+      onClose={onClose}
+    >
+      {err && <div className="alert alert-error" role="alert">{err}</div>}
+
+      <button
+        type="button"
+        className={"toggle-row" + (exit ? " on" : "")}
+        role="switch"
+        aria-checked={exit}
+        onClick={() => setExit((v) => !v)}
       >
-        <h2 style={{ marginTop: 0 }}>
-          Access level:{" "}
-          <span style={{ color: "var(--accent)" }}>{clientName}</span> →{" "}
-          <span style={{ color: "var(--ok)" }}>{nodeName}</span>
-        </h2>
-        <p className="mono" style={{ marginTop: -6 }}>
-          No rules = full access to all node subnets.
+        <span className={"switch" + (exit ? " on" : "")} aria-hidden="true" />
+        <span className="toggle-text">
+          <span className="toggle-title">Browse the internet through {nodeName}</span>
+          <span className="toggle-sub">
+            Websites will see {nodeName}&rsquo;s home internet address instead of the device&rsquo;s own.
+          </span>
+        </span>
+      </button>
+
+      <h3 className="section-h">What it can open</h3>
+
+      {exit && (
+        <p className="prose">
+          Not used while everything goes through {nodeName} — that already covers the whole
+          network. Turn the switch off to limit it to specific addresses again.
         </p>
-        {err && <div className="error">{err}</div>}
+      )}
 
-        <div
-          className="switch-wrap"
-          role="switch"
-          aria-checked={exit}
-          onClick={() => setExit((v) => !v)}
-          style={{ margin: "6px 0 14px" }}
-        >
-          <span className={"switch" + (exit ? " on" : "")} />
-          <span className={"switch-label" + (exit ? " on" : "")}>
-            route all internet through this node (home IP exit)
-          </span>
-        </div>
+      <datalist id="subnet-hints">
+        {subnetHints.map((s) => <option key={s} value={s} />)}
+      </datalist>
 
-        <datalist id="subnet-hints">
-          {subnetHints.map((s) => (
-            <option key={s} value={s} />
+      {loaded && rules.length === 0 && (
+        <p className="prose">
+          Everything on {nodeName}&rsquo;s network. Add a limit below if the device should only
+          reach one machine — a printer or a NAS, say (write a single machine as
+          <code>192.168.1.50/32</code>). Entering{" "}
+          <code>{CATCH_ALL}</code> instead turns on the switch above.
+        </p>
+      )}
+
+      {rules.length > 0 && (
+        <ul className={"rulelist" + (exit ? " off" : "")} role="list">
+          <li className="rulehead" aria-hidden="true">
+            <span>Address or range</span>
+            <span>Traffic</span>
+            <span>Ports</span>
+            <span />
+          </li>
+          {rules.map((r, i) => (
+            <li key={i} className="rulerow">
+              <input
+                type="text"
+                list="subnet-hints"
+                placeholder="192.168.1.50/32"
+                aria-label={`Limit ${i + 1}: address or range`}
+                value={r.dest}
+                disabled={exit}
+                onChange={(e) => update(i, { dest: e.target.value })}
+              />
+              <select
+                value={r.proto}
+                disabled={exit}
+                aria-label={`Limit ${i + 1}: traffic type`}
+                onChange={(e) => update(i, { proto: e.target.value as Rule["proto"] })}
+              >
+                <option value="any">Any</option>
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+              <span className="portpair">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="any"
+                  aria-label={`Limit ${i + 1}: first port`}
+                  disabled={exit}
+                  value={r.port_from || ""}
+                  onChange={(e) => update(i, { port_from: parseInt(e.target.value) || 0 })}
+                />
+                <span aria-hidden="true">–</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="any"
+                  aria-label={`Limit ${i + 1}: last port`}
+                  disabled={exit}
+                  value={r.port_to || ""}
+                  onChange={(e) => update(i, { port_to: parseInt(e.target.value) || 0 })}
+                />
+              </span>
+              <button className="danger icon" disabled={exit} onClick={() => removeRule(i)} aria-label={`Remove limit ${i + 1}`}>
+                ✕
+              </button>
+            </li>
           ))}
-        </datalist>
+        </ul>
+      )}
 
-        {loaded && rules.length === 0 && (
-          <div className="mono" style={{ margin: "10px 0" }}>
-            full access (no restrictions)
-          </div>
-        )}
-
-        {rules.map((r, i) => (
-          <div
-            key={i}
-            className="row"
-            style={{ marginBottom: 8, gap: 6, flexWrap: "nowrap" }}
-          >
-            <input
-              type="text"
-              list="subnet-hints"
-              placeholder="192.168.1.0/24"
-              value={r.dest}
-              onChange={(e) => update(i, { dest: e.target.value })}
-              style={{ flex: 2, width: "100vw" }}
-            />
-            <select
-              value={r.proto}
-              onChange={(e) =>
-                update(i, { proto: e.target.value as Rule["proto"] })
-              }
-              style={{
-                background: "var(--ink)",
-                color: "var(--text)",
-                border: "1px solid var(--line)",
-                borderRadius: 7,
-                padding: "8px",
-              }}
-            >
-              <option value="any">any</option>
-              <option value="tcp">tcp</option>
-              <option value="udp">udp</option>
-            </select>
-            <input
-              type="text"
-              placeholder="port"
-              value={r.port_from || ""}
-              onChange={(e) =>
-                update(i, { port_from: parseInt(e.target.value) || 0 })
-              }
-              style={{ width: 70 }}
-            />
-            <span className="mono">–</span>
-            <input
-              type="text"
-              placeholder="to"
-              value={r.port_to || ""}
-              onChange={(e) =>
-                update(i, { port_to: parseInt(e.target.value) || 0 })
-              }
-              style={{ width: 70 }}
-            />
-            <button className="danger" onClick={() => removeRule(i)}>
-              ✕
-            </button>
-          </div>
-        ))}
-
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="ghost" onClick={addRule}>
-            + Add rule
-          </button>
-          {onRevoke && (
-            <button className="danger" onClick={onRevoke}>
-              Revoke access
-            </button>
-          )}
-          <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-            <button className="ghost" onClick={onClose}>
-              Cancel
-            </button>
-            <button className="btn" onClick={save} disabled={busy}>
-              {busy ? "Saving…" : "Save"}
-            </button>
-          </span>
-        </div>
+      <div className="stack">
+        <button className="ghost" onClick={addRule} disabled={exit}>Add a limit</button>
       </div>
-    </div>
+
+      <ModalFooter>
+        {onRevoke && (
+          <button className="danger" style={{ marginRight: "auto" }} onClick={onRevoke}>
+            Remove access entirely
+          </button>
+        )}
+        <button className="ghost" onClick={onClose}>Cancel</button>
+        <button className="btn" onClick={save} disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </ModalFooter>
+    </Modal>
   );
 }

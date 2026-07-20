@@ -82,11 +82,11 @@ func TestRenderNode_NoLinks(t *testing.T) {
 // and scopes away from the WAN iface when set.
 func TestRenderNFT_MSSClamp(t *testing.T) {
 	hub := testHub(t)
-	if got := RenderNFT(hub, nil, nil); !strings.Contains(got, "tcp option maxseg size > 1280 tcp option maxseg size set 1280") {
+	if got := RenderNFT(hub, nil, nil, nil); !strings.Contains(got, "tcp option maxseg size > 1280 tcp option maxseg size set 1280") {
 		t.Errorf("expected MSS clamp in forward chain:\n%s", got)
 	}
 	hub.WANIface = "ens3"
-	if got := RenderNFT(hub, nil, nil); !strings.Contains(got, `oifname != "ens3" tcp flags syn tcp option maxseg size > 1280 tcp option maxseg size set 1280`) {
+	if got := RenderNFT(hub, nil, nil, nil); !strings.Contains(got, `oifname != "ens3" tcp flags syn tcp option maxseg size > 1280 tcp option maxseg size set 1280`) {
 		t.Errorf("expected WAN-scoped MSS clamp:\n%s", got)
 	}
 }
@@ -100,7 +100,7 @@ func TestRenderNFT_Links(t *testing.T) {
 		DstSubnets: []netip.Prefix{mustPrefix(t, "192.168.1.0/24"), mustPrefix(t, "192.168.2.0/24")},
 	}}
 
-	got := RenderNFT(hub, nil, links)
+	got := RenderNFT(hub, nil, nil, links)
 
 	for _, want := range []string{
 		"ip saddr 10.18.18.0/24 ip daddr 192.168.1.0/24 accept",
