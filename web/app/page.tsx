@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, Node, Client, NodeLink } from "./lib/api";
 import { humanError } from "./lib/errors";
@@ -50,6 +50,15 @@ export default function Dashboard() {
   const [configNode, setConfigNode] = useState<Node | null>(null);
   const [editingRules, setEditingRules] = useState<{ clientId: string; nodeId: string } | null>(null);
 
+  // Last payload seen per key, so an unchanged poll is a no-op.
+  const seen = useRef<Record<string, string>>({});
+  const setIfChanged = useCallback(<T,>(key: string, next: T, set: (v: T) => void) => {
+    const sig = JSON.stringify(next);
+    if (seen.current[key] === sig) return;
+    seen.current[key] = sig;
+    set(next);
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const [n, c, l, layout] = await Promise.all([
@@ -58,10 +67,14 @@ export default function Dashboard() {
         api.listNodeLinks(),
         api.getLayout().catch(() => ({})), // layout is optional; a fresh panel has none
       ]);
-      setNodes(n || []);
-      setClients(c || []);
-      setLinks(l || []);
-      setGroups(parseLayout(layout).groups);
+      // Only swap state the poll actually changed. Handing React a fresh array
+      // every five seconds re-renders the whole panel whether or not anything
+      // moved, and each of those re-renders re-creates the inline callbacks the
+      // modals receive — which is enough to disturb someone mid-form.
+      setIfChanged("nodes", n || [], setNodes);
+      setIfChanged("clients", c || [], setClients);
+      setIfChanged("links", l || [], setLinks);
+      setIfChanged("groups", parseLayout(layout).groups, setGroups);
       setErr("");
       setReady(true);
     } catch (e) {
@@ -70,7 +83,7 @@ export default function Dashboard() {
       setErr(humanError(e));
       setReady(true);
     }
-  }, [router]);
+  }, [router, setIfChanged]);
 
   // Poll so new enrolment requests and online/offline changes show up live.
   useEffect(() => {

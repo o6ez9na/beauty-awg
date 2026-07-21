@@ -2,9 +2,13 @@
 
 import { Handle, NodeResizer, Position, type NodeProps } from "@xyflow/react";
 
+import { GROUP_MIN_H, GROUP_MIN_W } from "../lib/groups";
+
 export type GroupCardData = {
   label: string;
   count: number;
+  /** Floor for manual resizing: the height this many members need. */
+  minHeight?: number;
   /** "#rrggbb", or "" for the default frame */
   color?: string;
   sel?: boolean;
@@ -38,8 +42,8 @@ export default function GroupNode({ data }: NodeProps) {
           Flow's internal `selected`, so the handles appear on exactly the same
           gesture that highlights everything else. */}
       <NodeResizer
-        minWidth={200}
-        minHeight={130}
+        minWidth={GROUP_MIN_W}
+        minHeight={d.minHeight ?? GROUP_MIN_H}
         isVisible={!!d.sel}
         onResizeEnd={(_, p) => d.onResize?.(Math.round(p.width), Math.round(p.height))}
       />

@@ -11,6 +11,7 @@ import (
 // peer has never completed a handshake.
 func LatestHandshakes(iface string) map[string]int64 {
 	out := map[string]int64{}
+	// #nosec G204 -- fixed binary; iface is a validated config value, not user input.
 	b, err := exec.Command("awg", "show", iface, "dump").Output()
 	if err != nil {
 		return out

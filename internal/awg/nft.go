@@ -67,9 +67,10 @@ func RenderNFT(hub Hub, nodes []Node, grants []Grant, links []NodeLink) string {
 			continue
 		}
 		if g.NodeExit {
-			// Full internet via this node: the client's default route is policy-
-			// routed into awg0, which egresses toward the exit node, and that node
-			// masquerades to its home WAN.
+			// Full internet via this node: the client is policy-routed into this
+			// node's own IPIP tunnel (see Applier.EnsureExitRoutes), which egresses
+			// toward the node over its /32, and that node masquerades to its home
+			// WAN. Per-node tunnels are what let several exit nodes coexist.
 			//
 			// Everything EXCEPT mesh destinations. This used to be a bare
 			// "ip saddr <client> accept", which reached every other site's LAN and
