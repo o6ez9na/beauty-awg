@@ -49,15 +49,16 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return err
 	}
 
-	// Policy-route node-exit clients' whole traffic into the tunnel so it egresses
-	// via the exit node's home internet instead of the hub's WAN.
-	var exitClients []netip.Addr
+	// Policy-route each node-exit client's whole traffic into a per-node IPIP
+	// tunnel, so it egresses via that exit node's home internet instead of the
+	// hub's WAN. Different clients may target different exit nodes simultaneously.
+	var exitRoutes []awg.ExitRoute
 	for _, g := range grants {
 		if g.NodeExit {
-			exitClients = append(exitClients, g.ClientAddr)
+			exitRoutes = append(exitRoutes, awg.ExitRoute{Client: g.ClientAddr, Node: g.NodeAddr})
 		}
 	}
-	if err := s.Applier.EnsureExitClients(exitClients); err != nil {
+	if err := s.Applier.EnsureExitRoutes(hub.Address, exitRoutes); err != nil {
 		return err
 	}
 

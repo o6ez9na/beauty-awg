@@ -17,16 +17,18 @@ const MATCHES: Match[] = [
       "These two locations use the same local network range, so traffic can't tell them apart. Change one router's range (for example from 192.168.1.x to 192.168.5.x) and try again.",
   },
   {
-    // The backend names the location that currently holds the exit; keep that
-    // name so the fix ("turn it off there") is one unambiguous click, not a hunt.
-    test: /node "([^"]+)" is already the internet exit/i,
+    // A device routes all its traffic to one place, so it can exit through only
+    // one location. The backend names the location it already exits through, so
+    // the fix ("turn that one off first") is one unambiguous click. Different
+    // devices/groups can still exit through different locations at the same time.
+    test: /already sends all traffic through "([^"]+)"/i,
     message: (m) =>
-      `Only one location can send all traffic at a time, and “${m[1]}” already does. Turn that off on “${m[1]}” first, then switch it on here.`,
+      `This device already browses the internet through “${m[1]}”. A device can use only one internet exit at a time — turn it off on “${m[1]}” first, then switch it on here.`,
   },
   {
     test: /already the internet exit/i,
     message:
-      "Only one location can be the internet exit at a time. Turn it off on the other location first.",
+      "This device is already set to browse the internet through another location. Turn that off first.",
   },
   {
     test: /internet-exit hub node cannot be part of a site-to-site link/i,
