@@ -174,11 +174,11 @@ func TestEnsureExitRoutes_DryRun(t *testing.T) {
 		// Addressing the decap device is what makes loose rp_filter reachable at
 		// all; see EnsureExitRoutes. Dropping this line silently breaks returns.
 		"ip addr replace 10.8.0.1/32 dev awgex2",
-		"sysctl -w net.ipv4.conf.awgex2.rp_filter=2",
+		"echo 2 > /proc/sys/net/ipv4/conf/awgex2/rp_filter",
 		"ip route replace default dev awgex2 table 1002",
 		"ip link add awgex3 type ipip local 10.8.0.1 remote 10.8.0.3",
 		"ip addr replace 10.8.0.1/32 dev awgex3",
-		"sysctl -w net.ipv4.conf.awgex3.rp_filter=2",
+		"echo 2 > /proc/sys/net/ipv4/conf/awgex3/rp_filter",
 		"ip route replace default dev awgex3 table 1003",
 		"flush ip rules pref 5100",
 		"ip rule add from 10.8.0.5/32 lookup 1002 pref 5100",
