@@ -26,11 +26,6 @@ const MATCHES: Match[] = [
       `This device already browses the internet through “${m[1]}”. A device can use only one internet exit at a time — turn it off on “${m[1]}” first, then switch it on here.`,
   },
   {
-    test: /already the internet exit/i,
-    message:
-      "This device is already set to browse the internet through another location. Turn that off first.",
-  },
-  {
     test: /internet-exit hub node cannot be part of a site-to-site link/i,
     message: "The internet exit can't be linked to another location.",
   },

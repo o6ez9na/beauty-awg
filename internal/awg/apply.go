@@ -19,6 +19,11 @@ type Applier struct {
 	DryRun  bool   // render only, never touch the system
 }
 
+// IfaceName reports the awg interface this Applier drives. It exists so callers
+// can hold an Applier behind an interface (see service.Applier) and still name
+// the device for read-only queries such as handshake listing.
+func (a Applier) IfaceName() string { return a.Iface }
+
 // Apply writes awg0.conf + acl.nft and hot-reloads both. `awg syncconf` updates
 // peers in place WITHOUT tearing the interface down, so existing tunnels (and
 // the node's CGNAT hole punch) survive a client add/remove.
@@ -184,6 +189,7 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 	if a.DryRun {
 		for _, d := range devs {
 			fmt.Printf("ip link add %s type ipip local %s remote %s\n", d.Name, hubAddr, d.Remote)
+			fmt.Printf("ip addr replace %s/32 dev %s\n", hubAddr, d.Name)
 			fmt.Printf("sysctl -w net.ipv4.conf.%s.rp_filter=2\n", d.Name)
 			fmt.Printf("ip route replace default dev %s table %s\n", d.Name, d.Table)
 		}
@@ -201,6 +207,13 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 			break
 		}
 	}
+
+	// Leftover from the single-exit design, which policy-routed exit clients into
+	// awg0 via table 51. Its source rules used the same pref, so they are already
+	// gone by here; only the route lingers, inert but confusing to anyone reading
+	// `ip route show table all`. Removed by hand rather than by flushing table 51,
+	// which is not ours to empty. Safe to delete once no upgraded hub predates it.
+	exec.Command("ip", "route", "del", "default", "dev", a.Iface, "table", "51").Run()
 
 	// Reconcile devices: tear down ones we own that are no longer wanted, create
 	// the missing ones, and (re)point each table's default route (idempotent).
@@ -222,11 +235,26 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 				return fmt.Errorf("ip link set %s up: %w: %s", d.Name, err, out)
 			}
 		}
-		// Loose reverse-path filtering on the decap device: the return traffic it
-		// carries is sourced from arbitrary internet hosts, which strict rp_filter
-		// would treat as spoofed. Loose passes because the hub's own WAN default
-		// route makes those sources "reachable". Value 2 is the max, so it wins the
-		// kernel's max(conf.all, conf.dev) regardless of the host's global setting.
+		// The decap device carries return traffic sourced from arbitrary internet
+		// hosts. Source validation happens to pass here even under strict
+		// rp_filter, because it looks up the source with flowi4.saddr set to the
+		// client — which matches that client's own `from <client> lookup <table>`
+		// rule, whose default route points back out this very device. We do not
+		// lean on that: these two lines make the device valid on its own terms.
+		//
+		// They are a pair. Loose rp_filter alone is not enough, because the
+		// kernel's loose branch in __fib_validate_source() is unreachable on a
+		// device with no IPv4 address — it falls through to last_resort, which
+		// rejects under ANY non-zero rp_filter. So the device gets the hub's own
+		// /32 (the address awg0 already holds; IPIP devices are NOARP, so nothing
+		// contends for it) and rp_filter is set per device — 2 is the max, so it
+		// wins the kernel's max(conf.all, conf.<dev>) whatever the host's global
+		// setting is, without loosening the rest of the machine. Note the order:
+		// removing an interface's last address also drops the routes through it,
+		// so the address must land before the table's default route below.
+		if out, err := exec.Command("ip", "addr", "replace", hubAddr.String()+"/32", "dev", d.Name).CombinedOutput(); err != nil {
+			return fmt.Errorf("ip addr replace on %s: %w: %s", d.Name, err, out)
+		}
 		if out, err := exec.Command("sysctl", "-w", "net.ipv4.conf."+d.Name+".rp_filter=2").CombinedOutput(); err != nil {
 			return fmt.Errorf("sysctl rp_filter %s: %w: %s", d.Name, err, out)
 		}
