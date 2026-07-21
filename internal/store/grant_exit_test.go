@@ -31,12 +31,11 @@ func testStore(t *testing.T) *Store {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(s.Close)
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	// The store and service packages test against the SAME database and Go runs
 	// packages in parallel, so serialize on an advisory lock rather than making
-	// the caller remember `-p 1`. Released before the pool closes (Cleanup is LIFO).
+	// the caller remember `-p 1`. Taken BEFORE Migrate: concurrent first runs
+	// would otherwise race to create the same types. Released before the pool
+	// closes (Cleanup is LIFO).
 	conn, err := s.Pool.Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -48,6 +47,9 @@ func testStore(t *testing.T) *Store {
 		conn.Exec(context.Background(), `SELECT pg_advisory_unlock(823041)`)
 		conn.Release()
 	})
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
 	// Each test starts from an empty mesh. hub is left alone (ensureHub is
 	// idempotent and the row is shared), but everything keyed off it is dropped.
 	for _, table := range []string{"grant_rules", "grants", "node_links", "clients", "node_subnets", "nodes"} {

@@ -127,6 +127,9 @@ type ExitRoute struct {
 // device/table across reconciles; every exit client gets a source rule at
 // exitPref steering it into its node's table.
 const (
+	// In-VPN destinations are diverted back to the main table at a LOWER pref,
+	// i.e. consulted before the per-client rule below.
+	exitMeshPref  = "5090"
 	exitPref      = "5100"
 	exitTableBase = 1000
 	exitDevPrefix = "awgex"
@@ -188,8 +191,23 @@ func rpFilterPath(dev string) string {
 // (exitDevPrefix*) that are no longer wanted are torn down, and the source rules
 // are flushed and rebuilt, so removing or repointing an exit cleans up. Multiple
 // exit nodes coexist because each rides its node's unique /32, not a shared
-// 0.0.0.0/0 that only one peer could hold. Call after Apply.
-func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error {
+// 0.0.0.0/0 that only one peer could hold.
+//
+// `mesh` is every destination that lives inside the VPN — each node's LAN plus
+// the client pool. Each gets a rule diverting it back to the main table ahead of
+// the per-client rules, because the source rule captures ALL of an exit client's
+// traffic: with only a default route in its table, a client whose internet goes
+// out one site would also have its access to every OTHER site (and to the rest
+// of the pool) tunnelled there, where nothing knows those addresses. "Send my
+// internet out this node" must not mean "send everything out this node" — the
+// same split the nftables ACL already makes (see RenderNFT's meshSet).
+//
+// Diverting by destination rather than copying routes into each exit table keeps
+// one source of truth: main already knows how to reach every mesh prefix (they
+// are pinned to the awg interface by EnsureRoutes, and the pool is on-link),
+// whereas per-table copies would have to be rebuilt and reaped per exit node.
+// Call after Apply.
+func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, routes []ExitRoute) error {
 	devs, rules := exitPlan(routes)
 
 	if a.DryRun {
@@ -199,18 +217,23 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 			fmt.Printf("echo 2 > %s\n", rpFilterPath(d.Name))
 			fmt.Printf("ip route replace default dev %s table %s\n", d.Name, d.Table)
 		}
-		fmt.Printf("flush ip rules pref %s\n", exitPref)
+		fmt.Printf("flush ip rules pref %s and %s\n", exitMeshPref, exitPref)
+		for _, m := range mesh {
+			fmt.Printf("ip rule add to %s lookup main pref %s\n", m, exitMeshPref)
+		}
 		for _, r := range rules {
 			fmt.Printf("ip rule add from %s/32 lookup %s pref %s\n", r.Client, r.Table, exitPref)
 		}
 		return nil
 	}
 
-	// Flush our source rules first (ip rule has no "replace"); loop because del
-	// removes one match at a time.
-	for {
-		if err := exec.Command("ip", "rule", "del", "pref", exitPref).Run(); err != nil {
-			break
+	// Flush our rules first (ip rule has no "replace"); loop because del removes
+	// one match at a time.
+	for _, pref := range []string{exitMeshPref, exitPref} {
+		for {
+			if err := exec.Command("ip", "rule", "del", "pref", pref).Run(); err != nil {
+				break
+			}
 		}
 	}
 
@@ -277,6 +300,15 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 		}
 		if out, err := exec.Command("ip", "route", "replace", "default", "dev", d.Name, "table", d.Table).CombinedOutput(); err != nil {
 			return fmt.Errorf("ip route replace default table %s: %w: %s", d.Table, err, out)
+		}
+	}
+
+	// Divert in-VPN destinations back to the main table, which already routes
+	// them over the awg interface, before the per-client rules send everything
+	// else down the tunnel.
+	for _, m := range mesh {
+		if out, err := exec.Command("ip", "rule", "add", "to", m.String(), "lookup", "main", "pref", exitMeshPref).CombinedOutput(); err != nil {
+			return fmt.Errorf("ip rule add to %s: %w: %s", m, err, out)
 		}
 	}
 

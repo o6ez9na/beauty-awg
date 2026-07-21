@@ -16,7 +16,7 @@ import (
 type Applier interface {
 	Apply(hubConf, nftRules string) error
 	EnsureRoutes(subnets []netip.Prefix) error
-	EnsureExitRoutes(hubAddr netip.Addr, routes []awg.ExitRoute) error
+	EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, routes []awg.ExitRoute) error
 	// IfaceName is the awg interface, needed by handlers that read handshakes.
 	IfaceName() string
 }
@@ -63,13 +63,22 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// Policy-route each node-exit client's whole traffic into a per-node IPIP
 	// tunnel, so it egresses via that exit node's home internet instead of the
 	// hub's WAN. Different clients may target different exit nodes simultaneously.
+	//
+	// Destinations inside the VPN are carved back out of that: the node LANs
+	// above plus the client pool. Without them an exit client would lose the
+	// other sites and the rest of the pool, since the source rule captures every
+	// packet it sends.
+	mesh := append([]netip.Prefix(nil), routes...)
+	if hub.PoolCIDR.IsValid() {
+		mesh = append(mesh, hub.PoolCIDR)
+	}
 	var exitRoutes []awg.ExitRoute
 	for _, g := range grants {
 		if g.NodeExit {
 			exitRoutes = append(exitRoutes, awg.ExitRoute{Client: g.ClientAddr, Node: g.NodeAddr})
 		}
 	}
-	if err := s.Applier.EnsureExitRoutes(hub.Address, exitRoutes); err != nil {
+	if err := s.Applier.EnsureExitRoutes(hub.Address, mesh, exitRoutes); err != nil {
 		return err
 	}
 
