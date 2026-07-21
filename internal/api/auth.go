@@ -104,8 +104,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// explicitly set (local, non-TLS development only) — hence it is a variable,
 	// not a literal true.
 	// #nosec G124 -- Secure is configurable by design (see SecureCookies).
-	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 		Name:     cookieName,
 		Value:    s.signToken(id.String()),
 		Path:     "/",
@@ -121,8 +120,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Clear the session cookie with the same security attributes it was set with,
 	// so browsers reliably overwrite the original rather than keeping a laxer twin.
 	// #nosec G124 -- Secure is configurable by design (see SecureCookies / handleLogin).
-	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 		Name:     cookieName,
 		Value:    "",
 		Path:     "/",
