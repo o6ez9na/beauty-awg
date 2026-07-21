@@ -10,11 +10,22 @@ import (
 	"6ers3rk/internal/store"
 )
 
+// Applier is the slice of awg.Applier that Reconcile drives. It is an interface
+// so the wiring — which grants become exit routes, what the hub config says —
+// can be tested without an awg interface or root on the machine running tests.
+type Applier interface {
+	Apply(hubConf, nftRules string) error
+	EnsureRoutes(subnets []netip.Prefix) error
+	EnsureExitRoutes(hubAddr netip.Addr, routes []awg.ExitRoute) error
+	// IfaceName is the awg interface, needed by handlers that read handshakes.
+	IfaceName() string
+}
+
 // Service is the glue: it turns current DB state into live hub config + nft
 // rules and applies them. Every mutation handler calls Reconcile afterward.
 type Service struct {
 	St       *store.Store
-	Applier  awg.Applier
+	Applier  Applier
 	Resolver *resolver.Resolver // optional split-horizon DNS resolver
 	Upstream string             // default DNS upstream, e.g. "1.1.1.1:53"
 

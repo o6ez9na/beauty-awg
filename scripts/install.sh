@@ -313,6 +313,30 @@ enable_forwarding() {
   sysctl -q -w net.ipv4.ip_forward=1
 }
 
+# Internet-exit routing rides a per-exit-node IPIP tunnel (see internal/awg).
+# The hub creates those tunnels from the backend container, which has NET_ADMIN
+# but cannot load kernel modules, so `ipip` has to be present on the HOST. The
+# node side needs the same module plus the iptables mangle extensions its
+# awg-quick PostUp uses; a missing one there aborts interface bring-up.
+ensure_ipip() {
+  modprobe ipip 2>/dev/null || true
+  echo 'ipip' >/etc/modules-load.d/6ers3rk-ipip.conf
+  if ip link show tunl0 >/dev/null 2>&1 || lsmod 2>/dev/null | grep -q '^ipip'; then
+    ok "ipip module available"
+  else
+    warn "the ipip kernel module is unavailable: 'browse the internet through <site>' will not work."
+    is_lxc && warn "inside LXC the module must be loaded ON THE HOST."
+  fi
+  # Probe by actually inserting the rule the node config relies on, then remove
+  # it again: -S alone would not tell us whether xt_CONNMARK is loadable.
+  if iptables -t mangle -A PREROUTING -j CONNMARK --restore-mark 2>/dev/null; then
+    iptables -t mangle -D PREROUTING -j CONNMARK --restore-mark 2>/dev/null || true
+    ok "iptables mangle + CONNMARK available"
+  else
+    warn "iptables mangle/CONNMARK is unavailable: internet-exit return traffic will be dropped."
+  fi
+}
+
 # True when we're running inside an LXC/container (not a VM or bare metal).
 is_lxc() {
   systemd-detect-virt -c 2>/dev/null | grep -qiE 'lxc|container' && return 0
@@ -407,6 +431,7 @@ install_panel() {
   install_awg_module
   enable_forwarding
   ensure_tun
+  ensure_ipip
   install_docker
   pkg_install git
 
@@ -528,6 +553,7 @@ install_node() {
   install_awg_tools
   enable_forwarding
   ensure_tun
+  ensure_ipip
   mkdir -p "$AWG_CONF_DIR"
 
   local webpw

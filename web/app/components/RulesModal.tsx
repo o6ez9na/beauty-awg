@@ -96,7 +96,9 @@ export default function RulesModal({
       // Narrower rules are kept: they come back when the exit is turned off.
       const toSave = exit ? rules.filter((r) => r.dest.trim() !== CATCH_ALL) : rules;
       for (const id of clientIds) {
-        // Exit first: it enforces the single-exit-location rule and may reject.
+        // Exit first: the server rejects a device that already exits through a
+        // DIFFERENT location (one default route per device). Two groups exiting
+        // through two different locations is fine and must not be blocked here.
         await api.setGrantExit(id, nodeId, exit);
         await api.setGrantRules(id, nodeId, toSave);
       }

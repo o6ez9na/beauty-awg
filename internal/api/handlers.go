@@ -21,7 +21,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	hs := awg.LatestHandshakes(s.Svc.Applier.IfaceName())
 	for i := range nodes {
 		nodes[i].Online = peerOnline(hs, nodes[i].PublicKey)
 	}
@@ -167,7 +167,7 @@ func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	hs := awg.LatestHandshakes(s.Svc.Applier.IfaceName())
 	for i := range clients {
 		clients[i].Online = peerOnline(hs, clients[i].PublicKey)
 	}

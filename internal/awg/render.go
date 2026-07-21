@@ -153,27 +153,47 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	// restored onto reply packets (everything NOT arriving on the tunnel, so the
 	// forward packet is never re-routed back into it and looped); marked replies
 	// are policy-routed out the tunnel instead of following the main route to the
-	// pool (which goes over awg0 and would be dropped). Loose reverse-path
-	// filtering is needed because the decapsulated inner source (a pool address)
-	// is "best reached" via awg0, which strict rp_filter would treat as a spoof.
+	// pool (which goes over awg0 and would be dropped).
+	//
+	// The tunnel needs BOTH an address and loose reverse-path filtering, and the
+	// two are not independent. The decapsulated inner source (a pool address) is
+	// "best reached" via awg0, not the tunnel, so strict rp_filter treats it as a
+	// spoof. Loose would accept it — but the kernel only reaches its loose branch
+	// if the receiving device has at least one IPv4 address; on an addressless
+	// device __fib_validate_source() falls through to last_resort, which rejects
+	// under ANY non-zero rp_filter. So we give the tunnel our own /32 (harmless:
+	// it is the same address awg0 already carries, and IPIP devices are NOARP)
+	// and set rp_filter=2 on the device itself rather than globally — 2 is the
+	// max, so it wins the kernel's max(conf.all, conf.<dev>) whatever the host's
+	// global setting is, without loosening the rest of the machine.
 	fmt.Fprintf(&b, "PostUp = ip link add %s type ipip local %s remote %s || true\n", nodeExitDev, n.Address.String(), hub.Address.String())
+	fmt.Fprintf(&b, "PostUp = ip addr replace %s/32 dev %s\n", n.Address.String(), nodeExitDev)
 	fmt.Fprintf(&b, "PostUp = ip link set %s up\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.conf.all.rp_filter=2\n")
+	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.conf.%s.rp_filter=2\n", nodeExitDev)
 	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %s -j ACCEPT\n", nodeExitDev)
 	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -o %s -j ACCEPT\n", nodeExitDev)
 	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A PREROUTING -i %s -j CONNMARK --set-mark %s\n", nodeExitDev, nodeExitMark)
 	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A PREROUTING ! -i %s -j CONNMARK --restore-mark\n", nodeExitDev)
 	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = ip rule add fwmark %s lookup %s pref %s\n", nodeExitMark, nodeExitTable, nodeExitPref)
-	fmt.Fprintf(&b, "PostUp = ip route add default dev %s table %s\n", nodeExitDev, nodeExitTable)
-	fmt.Fprintf(&b, "PostDown = ip route flush table %s\n", nodeExitTable)
-	fmt.Fprintf(&b, "PostDown = ip rule del fwmark %s lookup %s pref %s\n", nodeExitMark, nodeExitTable, nodeExitPref)
-	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D PREROUTING ! -i %s -j CONNMARK --restore-mark\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D PREROUTING -i %s -j CONNMARK --set-mark %s\n", nodeExitDev, nodeExitMark)
-	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -j ACCEPT\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -o %s -j ACCEPT\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostDown = ip link del %s\n", nodeExitDev)
+	// awg-quick aborts the whole bring-up on the first PostUp line that fails, so
+	// every line here has to survive finding its own leftovers: a `down` that was
+	// interrupted (or a reboot mid-teardown) leaves the rule and the route behind,
+	// and a plain `ip rule add` / `ip route add` then answers "File exists" and
+	// takes the interface down with it. `replace` is idempotent; the rule add is
+	// tolerated because a duplicate means the rule we want is already there.
+	fmt.Fprintf(&b, "PostUp = ip rule add fwmark %s lookup %s pref %s || true\n", nodeExitMark, nodeExitTable, nodeExitPref)
+	fmt.Fprintf(&b, "PostUp = ip route replace default dev %s table %s\n", nodeExitDev, nodeExitTable)
+	// Teardown is best-effort for the same reason, in reverse: a half-removed
+	// block must not stop the rest from being cleaned up, or the next `up` starts
+	// from an even messier state. `ip link del` last takes the address with it.
+	fmt.Fprintf(&b, "PostDown = ip route flush table %s || true\n", nodeExitTable)
+	fmt.Fprintf(&b, "PostDown = ip rule del fwmark %s lookup %s pref %s || true\n", nodeExitMark, nodeExitTable, nodeExitPref)
+	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D PREROUTING ! -i %s -j CONNMARK --restore-mark || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D PREROUTING -i %s -j CONNMARK --set-mark %s || true\n", nodeExitDev, nodeExitMark)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -j ACCEPT || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -o %s -j ACCEPT || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostDown = ip link del %s || true\n", nodeExitDev)
 
 	fmt.Fprintf(&b, "\n# hub\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.Keys.Public)
