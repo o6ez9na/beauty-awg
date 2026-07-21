@@ -2,6 +2,7 @@ package awg
 
 import (
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -175,6 +176,11 @@ func exitPlan(routes []ExitRoute) ([]exitDevice, []exitRule) {
 	return devs, rules
 }
 
+// rpFilterPath is the procfs knob for an interface's reverse-path filtering.
+func rpFilterPath(dev string) string {
+	return "/proc/sys/net/ipv4/conf/" + dev + "/rp_filter"
+}
+
 // EnsureExitRoutes reconciles the hub's internet-exit policy routing to exactly
 // the given client->node routes. Per distinct exit node: a dedicated IPIP tunnel
 // to the node's /32 with a default route in its own table. Per exit client: a
@@ -190,7 +196,7 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 		for _, d := range devs {
 			fmt.Printf("ip link add %s type ipip local %s remote %s\n", d.Name, hubAddr, d.Remote)
 			fmt.Printf("ip addr replace %s/32 dev %s\n", hubAddr, d.Name)
-			fmt.Printf("sysctl -w net.ipv4.conf.%s.rp_filter=2\n", d.Name)
+			fmt.Printf("echo 2 > %s\n", rpFilterPath(d.Name))
 			fmt.Printf("ip route replace default dev %s table %s\n", d.Name, d.Table)
 		}
 		fmt.Printf("flush ip rules pref %s\n", exitPref)
@@ -255,8 +261,19 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error 
 		if out, err := exec.Command("ip", "addr", "replace", hubAddr.String()+"/32", "dev", d.Name).CombinedOutput(); err != nil {
 			return fmt.Errorf("ip addr replace on %s: %w: %s", d.Name, err, out)
 		}
-		if out, err := exec.Command("sysctl", "-w", "net.ipv4.conf."+d.Name+".rp_filter=2").CombinedOutput(); err != nil {
-			return fmt.Errorf("sysctl rp_filter %s: %w: %s", d.Name, err, out)
+		// Written straight to procfs rather than shelled out to sysctl(8), which
+		// the backend container does not necessarily have — and best-effort,
+		// because Docker mounts /proc/sys read-only even with NET_ADMIN.
+		//
+		// Failing here is not fatal. Source validation on this device passes even
+		// under strict rp_filter: the kernel looks the source up with
+		// flowi4.saddr set to the exit client, which matches that client's own
+		// `from <client> lookup <table>` rule below, and that table's default
+		// route points back out this very device. The knob is belt-and-braces for
+		// the case where the rule is momentarily absent, so log and carry on
+		// rather than leaving the hub with no exit routing at all.
+		if err := os.WriteFile(rpFilterPath(d.Name), []byte("2\n"), 0o644); err != nil {
+			log.Printf("awg: could not set rp_filter on %s (%v) — exit returns still validate via the client's source rule", d.Name, err)
 		}
 		if out, err := exec.Command("ip", "route", "replace", "default", "dev", d.Name, "table", d.Table).CombinedOutput(); err != nil {
 			return fmt.Errorf("ip route replace default table %s: %w: %s", d.Table, err, out)
