@@ -33,6 +33,16 @@ export default function Modal({
   const titleId = useId();
   const token = useRef(Symbol("modal"));
 
+  // Held in a ref so the setup effect below can run ONCE, on mount. Callers pass
+  // onClose as an inline arrow, so it is a new function on every render of the
+  // page — and the page re-renders every few seconds as polling refreshes the
+  // device list. An effect depending on it would tear down and set up again on
+  // each of those, pulling focus back to the first field mid-typing.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     const me = token.current;
     stack.push(me);
@@ -50,7 +60,7 @@ export default function Modal({
 
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !panelRef.current) return;
@@ -83,7 +93,9 @@ export default function Modal({
       if (stack.length === 0) document.body.style.overflow = prevOverflow;
       restoreTo?.focus?.();
     };
-  }, [onClose]);
+    // Mount-only: see onCloseRef above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
