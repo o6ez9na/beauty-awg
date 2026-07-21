@@ -1,0 +1,41 @@
+name: Tests
+
+# Two-stage Go test run. The unit lane is fast and dependency-free; the
+# integration lane stands up a throwaway Postgres and is only reached when the
+# unit lane passes — so a broken unit never pays for the expensive DB run.
+
+on:
+  push:
+    branches: [main]
+    tags: ["**"] # every tag (release gating)
+  pull_request:
+  workflow_call: # lets release.yml run this as a prerequisite gate
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go-test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true # Go module + build cache, keyed on go.sum
+
+      # Stage 1 — fast unit lane. If this step fails the job stops here and the
+      # integration lane below never runs.
+      - name: Unit tests (fast)
+        run: ./scripts/test-unit.sh
+
+      # Stage 2 — database-backed integration lane, reached only when units pass.
+      # The script stands up its own throwaway Postgres via Docker (present on
+      # the runner), so no `services:` block is needed and it matches local runs.
+      - name: Integration tests (Postgres)
+        run: ./scripts/test-integration.sh
