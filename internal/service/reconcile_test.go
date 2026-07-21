@@ -21,6 +21,7 @@ type fakeApplier struct {
 	nftRules   string
 	routes     []netip.Prefix
 	exitHub    netip.Addr
+	exitMesh   []netip.Prefix
 	exitRoutes []awg.ExitRoute
 	calls      int
 }
@@ -31,8 +32,8 @@ func (f *fakeApplier) Apply(hubConf, nftRules string) error {
 	return nil
 }
 func (f *fakeApplier) EnsureRoutes(subnets []netip.Prefix) error { f.routes = subnets; return nil }
-func (f *fakeApplier) EnsureExitRoutes(hubAddr netip.Addr, routes []awg.ExitRoute) error {
-	f.exitHub, f.exitRoutes = hubAddr, routes
+func (f *fakeApplier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, routes []awg.ExitRoute) error {
+	f.exitHub, f.exitMesh, f.exitRoutes = hubAddr, mesh, routes
 	return nil
 }
 func (f *fakeApplier) IfaceName() string { return "awg0" }
@@ -51,12 +52,11 @@ func testService(t *testing.T) (*Service, *fakeApplier) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(st.Close)
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
 	// The store and service packages test against the SAME database and Go runs
 	// packages in parallel, so serialize on an advisory lock rather than making
-	// the caller remember `-p 1`. Released before the pool closes (Cleanup is LIFO).
+	// the caller remember `-p 1`. Taken BEFORE Migrate: concurrent first runs
+	// would otherwise race to create the same types. Released before the pool
+	// closes (Cleanup is LIFO).
 	conn, err := st.Pool.Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -68,6 +68,9 @@ func testService(t *testing.T) (*Service, *fakeApplier) {
 		conn.Exec(context.Background(), `SELECT pg_advisory_unlock(823041)`)
 		conn.Release()
 	})
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
 	for _, table := range []string{"grant_rules", "grants", "node_links", "clients", "node_subnets", "nodes"} {
 		if _, err := st.Pool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clean %s: %v", table, err)
@@ -161,6 +164,18 @@ func TestReconcile_TwoExitNodesBecomeTwoExitRoutes(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("exit route %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// The mesh carve-out must reach the applier, or exit clients lose every other
+	// site and the pool: the source rule captures all their traffic.
+	meshSeen := map[string]bool{}
+	for _, m := range f.exitMesh {
+		meshSeen[m.String()] = true
+	}
+	for _, want := range []string{"192.168.0.0/24", "192.168.1.0/24", "10.8.0.0/24"} {
+		if !meshSeen[want] {
+			t.Errorf("exit mesh carve-out missing %s: %v", want, f.exitMesh)
 		}
 	}
 

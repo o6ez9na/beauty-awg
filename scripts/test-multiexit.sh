@@ -200,7 +200,14 @@ node_postup mx-n2 n2-h 10.8.0.3
 # ------------------------------------------------ hub EnsureExitRoutes ---------
 # Mirrors internal/awg/apply.go EnsureExitRoutes (verified by its DryRun test).
 hub_exit_flush() {
-	while n mx-hub ip rule del pref 5100 2>/dev/null; do :; done
+	for pref in 5090 5100; do
+		while n mx-hub ip rule del pref $pref 2>/dev/null; do :; done
+	done
+}
+# In-VPN destinations go back to the main table ahead of the per-client rules,
+# so "all my internet via that site" does not also mean "all my ACCESS via it".
+hub_exit_mesh() { # hub_exit_mesh <prefix>...
+	for m in "$@"; do n mx-hub ip rule add to "$m" lookup main pref 5090; done
 }
 hub_exit_dev() { # hub_exit_dev <dev> <node-ip> <table>
 	n mx-hub ip link add "$1" type ipip local 10.8.0.1 remote "$2"
@@ -217,6 +224,7 @@ step "applying exit routes: cA -> node1, cB -> node2"
 hub_exit_dev awgex2 10.8.0.2 1002
 hub_exit_dev awgex3 10.8.0.3 1003
 hub_exit_flush
+hub_exit_mesh 10.8.0.0/24 192.168.0.0/24
 hub_exit_rule 10.8.0.5 1002
 hub_exit_rule 10.8.0.6 1003
 
@@ -344,6 +352,7 @@ step "5. isolation: removing cB's exit leaves cA working"
 
 hub_exit_flush
 n mx-hub ip link del awgex3
+hub_exit_mesh 10.8.0.0/24 192.168.0.0/24
 hub_exit_rule 10.8.0.5 1002
 
 if ping_out mx-cA; then ok "cA still exits via node1 after node2's exit is torn down"
@@ -359,6 +368,7 @@ step "6. re-adding cB's exit is idempotent"
 
 hub_exit_dev awgex3 10.8.0.3 1003
 hub_exit_flush
+hub_exit_mesh 10.8.0.0/24 192.168.0.0/24
 hub_exit_rule 10.8.0.5 1002
 hub_exit_rule 10.8.0.6 1003
 if ping_out mx-cB; then ok "cB exits via node2 again after re-add"
@@ -521,6 +531,7 @@ node_postup mx-n1 n1-h 10.8.0.2
 n mx-hub ip route del default dev h-n1 table 51 2>/dev/null || true
 hub_exit_dev awgex2 10.8.0.2 1002
 hub_exit_flush
+hub_exit_mesh 10.8.0.0/24 192.168.0.0/24
 hub_exit_rule 10.8.0.5 1002
 hub_exit_rule 10.8.0.6 1003
 
@@ -532,6 +543,32 @@ else bad "and the node-exit now works through the new IPIP path"; fi
 if [ -z "$(n mx-hub ip route show table 51 2>/dev/null)" ]; then
 	ok "the old table 51 default route is gone"
 else bad "the old table 51 default route is gone"; fi
+
+step "12. an exit client keeps its access to the rest of the VPN"
+
+# The source rule captures everything an exit client sends. Without the mesh
+# diversion its traffic to another site (and to the pool) would be tunnelled to
+# its exit node, which knows nothing about those addresses and NATs them at its
+# WAN — the destination simply never answers.
+if n mx-cA ping -c 2 -i 0.3 -W 2 192.168.0.10 >/dev/null 2>&1; then
+	ok "cA reaches the LAN behind its own exit node while exiting through it"
+else bad "cA reaches the LAN behind its own exit node while exiting through it"; fi
+if n mx-cA ping -c 2 -i 0.3 -W 2 10.8.0.6 >/dev/null 2>&1; then
+	ok "cA reaches another client in the pool"
+else bad "cA reaches another client in the pool"; fi
+
+# Prove the diversion is what does it, not luck: drop it and the same pings die
+# while the internet still works.
+for m in 10.8.0.0/24 192.168.0.0/24; do n mx-hub ip rule del to $m lookup main pref 5090; done
+if n mx-cA ping -c 1 -W 2 10.8.0.6 >/dev/null 2>&1; then
+	bad "without the diversion, pool traffic is swallowed by the exit tunnel"
+else ok "without the diversion, pool traffic is swallowed by the exit tunnel"; fi
+if ping_out mx-cA; then ok "  ...while the internet exit itself is unaffected"
+else bad "  ...while the internet exit itself is unaffected"; fi
+hub_exit_mesh 10.8.0.0/24 192.168.0.0/24
+if n mx-cA ping -c 2 -i 0.3 -W 2 10.8.0.6 >/dev/null 2>&1; then
+	ok "restoring the diversion restores in-VPN access"
+else bad "restoring the diversion restores in-VPN access"; fi
 
 # ------------------------------------------------------------------ summary ---
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

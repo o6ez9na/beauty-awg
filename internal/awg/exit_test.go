@@ -160,12 +160,16 @@ func TestExitDevNaming(t *testing.T) {
 func TestEnsureExitRoutes_DryRun(t *testing.T) {
 	a := Applier{Iface: "awg0", DryRun: true}
 	hub := netip.MustParseAddr("10.8.0.1")
+	mesh := []netip.Prefix{
+		netip.MustParsePrefix("192.168.1.0/24"),
+		netip.MustParsePrefix("10.8.0.0/24"),
+	}
 	routes := []ExitRoute{
 		{netip.MustParseAddr("10.8.0.5"), netip.MustParseAddr("10.8.0.2")},
 		{netip.MustParseAddr("10.8.0.6"), netip.MustParseAddr("10.8.0.3")},
 	}
 	out := captureStdout(t, func() {
-		if err := a.EnsureExitRoutes(hub, routes); err != nil {
+		if err := a.EnsureExitRoutes(hub, mesh, routes); err != nil {
 			t.Fatalf("EnsureExitRoutes: %v", err)
 		}
 	})
@@ -180,7 +184,11 @@ func TestEnsureExitRoutes_DryRun(t *testing.T) {
 		"ip addr replace 10.8.0.1/32 dev awgex3",
 		"echo 2 > /proc/sys/net/ipv4/conf/awgex3/rp_filter",
 		"ip route replace default dev awgex3 table 1003",
-		"flush ip rules pref 5100",
+		"flush ip rules pref 5090 and 5100",
+		// In-VPN destinations are diverted back to main BEFORE the per-client
+		// rules, or an exit client loses every other site and the pool.
+		"ip rule add to 192.168.1.0/24 lookup main pref 5090",
+		"ip rule add to 10.8.0.0/24 lookup main pref 5090",
 		"ip rule add from 10.8.0.5/32 lookup 1002 pref 5100",
 		"ip rule add from 10.8.0.6/32 lookup 1003 pref 5100",
 	} {
@@ -194,7 +202,7 @@ func TestEnsureExitRoutes_DryRun(t *testing.T) {
 func TestEnsureExitRoutes_Empty(t *testing.T) {
 	a := Applier{Iface: "awg0", DryRun: true}
 	out := captureStdout(t, func() {
-		if err := a.EnsureExitRoutes(netip.MustParseAddr("10.8.0.1"), nil); err != nil {
+		if err := a.EnsureExitRoutes(netip.MustParseAddr("10.8.0.1"), nil, nil); err != nil {
 			t.Fatalf("EnsureExitRoutes(nil): %v", err)
 		}
 	})
