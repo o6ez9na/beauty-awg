@@ -32,7 +32,7 @@ import { configChanged, toast } from "../lib/toast";
 import { humanError } from "../lib/errors";
 import { useTheme } from "../lib/theme";
 import {
-  Group, GROUP_DEF_H, GROUP_DEF_W, Layout, gid, isGroupId, groupGrants,
+  Group, GROUP_DEF_H, GROUP_DEF_W, Layout, gid, groupMinHeight, isGroupId, groupGrants,
   groupedClientIds, memberSeat, newGroupId, parseLayout, serializeLayout, syncPlan,
 } from "../lib/groups";
 import GroupNode from "./GroupNode";
@@ -447,7 +447,12 @@ function Graph({
         return {
           id, type: "devgroup",
           position: pos(id, { x: 20, y: 24 + cn++ * 96 }),
-          style: { width: g.w ?? GROUP_DEF_W, height: g.h ?? GROUP_DEF_H },
+          // Never smaller than the member stack: a remembered height from when
+          // the group held fewer devices would otherwise clip the newest ones.
+          style: {
+            width: g.w ?? GROUP_DEF_W,
+            height: Math.max(g.h ?? GROUP_DEF_H, groupMinHeight(g.members.length)),
+          },
           zIndex: connectingFrom ? 20 : id === sel ? 10 : 0,
           data: {
             label: g.name,
@@ -456,6 +461,7 @@ function Graph({
             sel: id === sel, dim: anchor !== null && !connected.has(id),
             candidate: canDrop(id), dragging: id === connectingFrom,
             muted: connectingFrom !== null && id !== connectingFrom && !canDrop(id),
+            minHeight: groupMinHeight(g.members.length),
             onGear: () => setEditingGroup(g.id),
             onResize: (w: number, h: number) => updateGroupRef.current?.(g.id, { w, h }),
           },
