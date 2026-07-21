@@ -64,7 +64,7 @@ jobs:
 
       - name: Docker meta (labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
 
@@ -125,7 +125,7 @@ jobs:
 
       - name: Docker meta (tags)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           # On release, derive from the git tag; on dispatch, from the input.
