@@ -6,6 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // Applier writes and reloads the hub's live config. It runs ON the VPS hub.
@@ -105,46 +108,169 @@ func (a Applier) EnsureRoutes(subnets []netip.Prefix) error {
 	return nil
 }
 
-// exitTable + exitPref are the dedicated policy-routing table and rule priority
-// used to send a node-exit client's whole default route into the awg interface
-// (so it reaches the exit node), without touching the hub's own default route.
+// ExitRoute maps an internet-exit client (tunnel IP) to the exit node (tunnel
+// IP) its whole traffic should leave through. Different clients may point at
+// different nodes — that is the whole point of the IPIP scheme.
+type ExitRoute struct {
+	Client netip.Addr
+	Node   netip.Addr
+}
+
+// Exit policy-routing constants. Every exit node gets its own IPIP device and
+// routing table, keyed off the node's tunnel address so a node maps to the same
+// device/table across reconciles; every exit client gets a source rule at
+// exitPref steering it into its node's table.
 const (
-	exitTable = "51"
-	exitPref  = "5100"
+	exitPref      = "5100"
+	exitTableBase = 1000
+	exitDevPrefix = "awgex"
 )
 
-// EnsureExitClients makes each given client tunnel IP policy-route its whole
-// traffic into the awg interface (table 51 default => dev awg0). The awg
-// cryptokey map then sends internet-bound packets to the exit node (whose hub
-// peer AllowedIPs includes 0.0.0.0/0). Rules at exitPref are flushed and rebuilt
-// each call, so removing a client's exit cleans up. The local table (pref 0)
-// still handles the hub's own addresses first, so the resolver keeps working.
-func (a Applier) EnsureExitClients(clients []netip.Addr) error {
+type exitDevice struct {
+	Name   string
+	Remote netip.Addr
+	Table  string
+}
+type exitRule struct {
+	Client netip.Addr
+	Table  string
+}
+
+// exitIndex is a stable small integer for a node's tunnel address — its host
+// part within a /16-or-smaller pool. Node tunnel IPs are unique in the pool, so
+// this is collision-free for any sane deployment.
+func exitIndex(node netip.Addr) int {
+	b := node.As4()
+	return int(b[2])<<8 | int(b[3])
+}
+func exitDevName(node netip.Addr) string  { return fmt.Sprintf("%s%d", exitDevPrefix, exitIndex(node)) }
+func exitTableFor(node netip.Addr) string { return strconv.Itoa(exitTableBase + exitIndex(node)) }
+
+// exitPlan turns desired routes into the IPIP devices to ensure (one per
+// distinct exit node) and the per-client source rules. Pure and order-stable so
+// it can be unit-tested and diffed.
+func exitPlan(routes []ExitRoute) ([]exitDevice, []exitRule) {
+	seen := map[netip.Addr]bool{}
+	var devs []exitDevice
+	var rules []exitRule
+	for _, r := range routes {
+		if !seen[r.Node] {
+			seen[r.Node] = true
+			devs = append(devs, exitDevice{Name: exitDevName(r.Node), Remote: r.Node, Table: exitTableFor(r.Node)})
+		}
+		rules = append(rules, exitRule{Client: r.Client, Table: exitTableFor(r.Node)})
+	}
+	sort.Slice(devs, func(i, j int) bool { return devs[i].Remote.Less(devs[j].Remote) })
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].Client != rules[j].Client {
+			return rules[i].Client.Less(rules[j].Client)
+		}
+		return rules[i].Table < rules[j].Table
+	})
+	return devs, rules
+}
+
+// EnsureExitRoutes reconciles the hub's internet-exit policy routing to exactly
+// the given client->node routes. Per distinct exit node: a dedicated IPIP tunnel
+// to the node's /32 with a default route in its own table. Per exit client: a
+// source rule steering it into its node's table. IPIP devices we own
+// (exitDevPrefix*) that are no longer wanted are torn down, and the source rules
+// are flushed and rebuilt, so removing or repointing an exit cleans up. Multiple
+// exit nodes coexist because each rides its node's unique /32, not a shared
+// 0.0.0.0/0 that only one peer could hold. Call after Apply.
+func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, routes []ExitRoute) error {
+	devs, rules := exitPlan(routes)
+
 	if a.DryRun {
-		fmt.Printf("ip route replace default dev %s table %s\n", a.Iface, exitTable)
+		for _, d := range devs {
+			fmt.Printf("ip link add %s type ipip local %s remote %s\n", d.Name, hubAddr, d.Remote)
+			fmt.Printf("sysctl -w net.ipv4.conf.%s.rp_filter=2\n", d.Name)
+			fmt.Printf("ip route replace default dev %s table %s\n", d.Name, d.Table)
+		}
 		fmt.Printf("flush ip rules pref %s\n", exitPref)
-		for _, c := range clients {
-			fmt.Printf("ip rule add from %s/32 lookup %s pref %s\n", c.String(), exitTable, exitPref)
+		for _, r := range rules {
+			fmt.Printf("ip rule add from %s/32 lookup %s pref %s\n", r.Client, r.Table, exitPref)
 		}
 		return nil
 	}
 
-	// Default route for the exit table. Idempotent.
-	if out, err := exec.Command("ip", "route", "replace", "default", "dev", a.Iface, "table", exitTable).CombinedOutput(); err != nil {
-		return fmt.Errorf("ip route replace default table %s: %w: %s", exitTable, err, out)
-	}
-
-	// Flush our source rules (ip rule has no "replace"), then re-add the current
-	// set. Deleting by pref removes one match at a time; loop until none remain.
+	// Flush our source rules first (ip rule has no "replace"); loop because del
+	// removes one match at a time.
 	for {
 		if err := exec.Command("ip", "rule", "del", "pref", exitPref).Run(); err != nil {
 			break
 		}
 	}
-	for _, c := range clients {
-		if out, err := exec.Command("ip", "rule", "add", "from", c.String()+"/32", "lookup", exitTable, "pref", exitPref).CombinedOutput(); err != nil {
-			return fmt.Errorf("ip rule add from %s: %w: %s", c, err, out)
+
+	// Reconcile devices: tear down ones we own that are no longer wanted, create
+	// the missing ones, and (re)point each table's default route (idempotent).
+	want := map[string]bool{}
+	for _, d := range devs {
+		want[d.Name] = true
+	}
+	for _, name := range a.listExitDevices() {
+		if !want[name] {
+			exec.Command("ip", "link", "del", name).Run()
+		}
+	}
+	for _, d := range devs {
+		if !a.linkExists(d.Name) {
+			if out, err := exec.Command("ip", "link", "add", d.Name, "type", "ipip", "local", hubAddr.String(), "remote", d.Remote.String()).CombinedOutput(); err != nil {
+				return fmt.Errorf("ip link add %s: %w: %s", d.Name, err, out)
+			}
+			if out, err := exec.Command("ip", "link", "set", d.Name, "up").CombinedOutput(); err != nil {
+				return fmt.Errorf("ip link set %s up: %w: %s", d.Name, err, out)
+			}
+		}
+		// Loose reverse-path filtering on the decap device: the return traffic it
+		// carries is sourced from arbitrary internet hosts, which strict rp_filter
+		// would treat as spoofed. Loose passes because the hub's own WAN default
+		// route makes those sources "reachable". Value 2 is the max, so it wins the
+		// kernel's max(conf.all, conf.dev) regardless of the host's global setting.
+		if out, err := exec.Command("sysctl", "-w", "net.ipv4.conf."+d.Name+".rp_filter=2").CombinedOutput(); err != nil {
+			return fmt.Errorf("sysctl rp_filter %s: %w: %s", d.Name, err, out)
+		}
+		if out, err := exec.Command("ip", "route", "replace", "default", "dev", d.Name, "table", d.Table).CombinedOutput(); err != nil {
+			return fmt.Errorf("ip route replace default table %s: %w: %s", d.Table, err, out)
+		}
+	}
+
+	// Add the source rules.
+	for _, r := range rules {
+		if out, err := exec.Command("ip", "rule", "add", "from", r.Client.String()+"/32", "lookup", r.Table, "pref", exitPref).CombinedOutput(); err != nil {
+			return fmt.Errorf("ip rule add from %s: %w: %s", r.Client, err, out)
 		}
 	}
 	return nil
+}
+
+// listExitDevices returns the IPIP devices this Applier owns (named
+// exitDevPrefix*), so stale ones can be reaped when their node stops being an
+// exit. Never returns the kernel's fallback tunl0.
+func (a Applier) listExitDevices() []string {
+	out, err := exec.Command("ip", "-o", "link", "show").Output()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		// "<idx>: <name>@NONE: <...>" — the name is the second colon field, minus
+		// any "@peer" suffix.
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[1])
+		if i := strings.IndexByte(name, '@'); i >= 0 {
+			name = name[:i]
+		}
+		if strings.HasPrefix(name, exitDevPrefix) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func (a Applier) linkExists(name string) bool {
+	return exec.Command("ip", "link", "show", name).Run() == nil
 }

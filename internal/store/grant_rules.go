@@ -122,11 +122,13 @@ func (s *Store) GrantExit(ctx context.Context, clientID, nodeID uuid.UUID) (bool
 	return exit, err
 }
 
-// SetGrantExit toggles internet-exit for a grant. WireGuard cryptokey routing is
-// dst-based and global per interface, so only ONE node can be the active exit at
-// a time: enabling exit on a node while a DIFFERENT node already has an exit
-// grant is rejected. The hub node (is_hub) is its own exit and cannot be toggled
-// this way.
+// SetGrantExit toggles internet-exit for a grant. A single device routes all its
+// traffic to ONE place (its default route), so a device may exit through at most
+// one node at a time: enabling exit for a device that already exits via a
+// DIFFERENT node is rejected. Different devices, however, may exit through
+// different nodes simultaneously — the hub sends each into its node's own IPIP
+// tunnel (see awg.Applier.EnsureExitRoutes). The hub node (is_hub) is its own
+// exit and cannot be toggled this way.
 func (s *Store) SetGrantExit(ctx context.Context, clientID, nodeID uuid.UUID, exit bool) error {
 	return pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
 		var exists, isHub bool
@@ -146,9 +148,9 @@ func (s *Store) SetGrantExit(ctx context.Context, clientID, nodeID uuid.UUID, ex
 			var otherName string
 			err := tx.QueryRow(ctx, `
 				SELECT n.name FROM grants g JOIN nodes n ON n.id = g.node_id
-				WHERE g.exit AND g.node_id <> $1 LIMIT 1`, nodeID).Scan(&otherName)
+				WHERE g.exit AND g.client_id = $1 AND g.node_id <> $2 LIMIT 1`, clientID, nodeID).Scan(&otherName)
 			if err == nil {
-				return fmt.Errorf("node %q is already the internet exit — only one exit node is allowed at a time", otherName)
+				return fmt.Errorf("this device already sends all traffic through %q — a device can use only one internet exit at a time", otherName)
 			}
 			if err != pgx.ErrNoRows {
 				return err
