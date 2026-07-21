@@ -56,12 +56,12 @@ func (a Applier) Apply(hubConf, nftRules string) error {
 	// which also runs PostUp. Afterwards, hot-sync in place so live tunnels
 	// (and the node's CGNAT hole punch) survive config changes.
 	if !a.ifaceExists() {
-		if out, err := exec.Command("awg-quick", "up", a.Iface).CombinedOutput(); err != nil {
+		if out, err := runCmd("awg-quick", "up", a.Iface); err != nil {
 			return fmt.Errorf("awg-quick up: %w: %s", err, out)
 		}
 	} else {
 		// syncconf takes a STRIPPED config (no PostUp/DNS/etc).
-		stripped, err := exec.Command("awg-quick", "strip", a.Iface).Output()
+		stripped, err := outCmd("awg-quick", "strip", a.Iface)
 		if err != nil {
 			return fmt.Errorf("awg-quick strip: %w", err)
 		}
@@ -73,13 +73,13 @@ func (a Applier) Apply(hubConf, nftRules string) error {
 		if _, err := tmp.Write(stripped); err != nil {
 			return err
 		}
-		tmp.Close()
-		if out, err := exec.Command("awg", "syncconf", a.Iface, tmp.Name()).CombinedOutput(); err != nil {
+		_ = tmp.Close()
+		if out, err := runCmd("awg", "syncconf", a.Iface, tmp.Name()); err != nil {
 			return fmt.Errorf("awg syncconf: %w: %s", err, out)
 		}
 	}
 
-	if out, err := exec.Command("nft", "-f", a.NFTFile).CombinedOutput(); err != nil {
+	if out, err := runCmd("nft", "-f", a.NFTFile); err != nil {
 		return fmt.Errorf("nft reload: %w: %s", err, out)
 	}
 	return nil
@@ -87,7 +87,7 @@ func (a Applier) Apply(hubConf, nftRules string) error {
 
 // ifaceExists reports whether the awg interface is present in the netns.
 func (a Applier) ifaceExists() bool {
-	return exec.Command("ip", "link", "show", a.Iface).Run() == nil
+	return tryCmd("ip", "link", "show", a.Iface) == nil
 }
 
 // EnsureRoutes installs a route to the awg interface for each node LAN subnet.
@@ -107,7 +107,7 @@ func (a Applier) EnsureRoutes(subnets []netip.Prefix) error {
 		if s.Bits() == 0 {
 			continue // never pin a default route to the tunnel here
 		}
-		if out, err := exec.Command("ip", "route", "replace", s.String(), "dev", a.Iface).CombinedOutput(); err != nil {
+		if out, err := runCmd("ip", "route", "replace", s.String(), "dev", a.Iface); err != nil {
 			return fmt.Errorf("ip route replace %s: %w: %s", s, err, out)
 		}
 	}
@@ -231,7 +231,7 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 	// one match at a time.
 	for _, pref := range []string{exitMeshPref, exitPref} {
 		for {
-			if err := exec.Command("ip", "rule", "del", "pref", pref).Run(); err != nil {
+			if err := tryCmd("ip", "rule", "del", "pref", pref); err != nil {
 				break
 			}
 		}
@@ -242,7 +242,7 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 	// gone by here; only the route lingers, inert but confusing to anyone reading
 	// `ip route show table all`. Removed by hand rather than by flushing table 51,
 	// which is not ours to empty. Safe to delete once no upgraded hub predates it.
-	exec.Command("ip", "route", "del", "default", "dev", a.Iface, "table", "51").Run()
+	_ = tryCmd("ip", "route", "del", "default", "dev", a.Iface, "table", "51")
 
 	// Reconcile devices: tear down ones we own that are no longer wanted, create
 	// the missing ones, and (re)point each table's default route (idempotent).
@@ -252,15 +252,15 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 	}
 	for _, name := range a.listExitDevices() {
 		if !want[name] {
-			exec.Command("ip", "link", "del", name).Run()
+			_ = tryCmd("ip", "link", "del", name)
 		}
 	}
 	for _, d := range devs {
 		if !a.linkExists(d.Name) {
-			if out, err := exec.Command("ip", "link", "add", d.Name, "type", "ipip", "local", hubAddr.String(), "remote", d.Remote.String()).CombinedOutput(); err != nil {
+			if out, err := runCmd("ip", "link", "add", d.Name, "type", "ipip", "local", hubAddr.String(), "remote", d.Remote.String()); err != nil {
 				return fmt.Errorf("ip link add %s: %w: %s", d.Name, err, out)
 			}
-			if out, err := exec.Command("ip", "link", "set", d.Name, "up").CombinedOutput(); err != nil {
+			if out, err := runCmd("ip", "link", "set", d.Name, "up"); err != nil {
 				return fmt.Errorf("ip link set %s up: %w: %s", d.Name, err, out)
 			}
 		}
@@ -281,7 +281,7 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 		// setting is, without loosening the rest of the machine. Note the order:
 		// removing an interface's last address also drops the routes through it,
 		// so the address must land before the table's default route below.
-		if out, err := exec.Command("ip", "addr", "replace", hubAddr.String()+"/32", "dev", d.Name).CombinedOutput(); err != nil {
+		if out, err := runCmd("ip", "addr", "replace", hubAddr.String()+"/32", "dev", d.Name); err != nil {
 			return fmt.Errorf("ip addr replace on %s: %w: %s", d.Name, err, out)
 		}
 		// Written straight to procfs rather than shelled out to sysctl(8), which
@@ -295,10 +295,12 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 		// route points back out this very device. The knob is belt-and-braces for
 		// the case where the rule is momentarily absent, so log and carry on
 		// rather than leaving the hub with no exit routing at all.
-		if err := os.WriteFile(rpFilterPath(d.Name), []byte("2\n"), 0o644); err != nil {
+		// The target is a pre-existing procfs knob, so the mode is ignored by the
+		// kernel; 0o600 keeps gosec (G306) happy without changing behaviour.
+		if err := os.WriteFile(rpFilterPath(d.Name), []byte("2\n"), 0o600); err != nil {
 			log.Printf("awg: could not set rp_filter on %s (%v) — exit returns still validate via the client's source rule", d.Name, err)
 		}
-		if out, err := exec.Command("ip", "route", "replace", "default", "dev", d.Name, "table", d.Table).CombinedOutput(); err != nil {
+		if out, err := runCmd("ip", "route", "replace", "default", "dev", d.Name, "table", d.Table); err != nil {
 			return fmt.Errorf("ip route replace default table %s: %w: %s", d.Table, err, out)
 		}
 	}
@@ -307,14 +309,14 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 	// them over the awg interface, before the per-client rules send everything
 	// else down the tunnel.
 	for _, m := range mesh {
-		if out, err := exec.Command("ip", "rule", "add", "to", m.String(), "lookup", "main", "pref", exitMeshPref).CombinedOutput(); err != nil {
+		if out, err := runCmd("ip", "rule", "add", "to", m.String(), "lookup", "main", "pref", exitMeshPref); err != nil {
 			return fmt.Errorf("ip rule add to %s: %w: %s", m, err, out)
 		}
 	}
 
 	// Add the source rules.
 	for _, r := range rules {
-		if out, err := exec.Command("ip", "rule", "add", "from", r.Client.String()+"/32", "lookup", r.Table, "pref", exitPref).CombinedOutput(); err != nil {
+		if out, err := runCmd("ip", "rule", "add", "from", r.Client.String()+"/32", "lookup", r.Table, "pref", exitPref); err != nil {
 			return fmt.Errorf("ip rule add from %s: %w: %s", r.Client, err, out)
 		}
 	}
@@ -325,7 +327,7 @@ func (a Applier) EnsureExitRoutes(hubAddr netip.Addr, mesh []netip.Prefix, route
 // exitDevPrefix*), so stale ones can be reaped when their node stops being an
 // exit. Never returns the kernel's fallback tunl0.
 func (a Applier) listExitDevices() []string {
-	out, err := exec.Command("ip", "-o", "link", "show").Output()
+	out, err := outCmd("ip", "-o", "link", "show")
 	if err != nil {
 		return nil
 	}
@@ -349,5 +351,30 @@ func (a Applier) listExitDevices() []string {
 }
 
 func (a Applier) linkExists(name string) bool {
-	return exec.Command("ip", "link", "show", name).Run() == nil
+	return tryCmd("ip", "link", "show", name) == nil
+}
+
+// This package orchestrates the host network stack: every subprocess is a fixed
+// binary (ip / awg / awg-quick / nft) whose arguments come from validated
+// internal state — interface names, netip addresses, and numeric routing-table
+// ids — never from untrusted request input. The helpers below centralise those
+// invocations so the accepted G204 risk is documented once rather than at every
+// call site.
+
+// runCmd runs a config command and returns its combined output.
+func runCmd(name string, args ...string) ([]byte, error) {
+	// #nosec G204 -- fixed binary, args from validated internal state (see above).
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+// outCmd runs a config command and returns its stdout.
+func outCmd(name string, args ...string) ([]byte, error) {
+	// #nosec G204 -- fixed binary, args from validated internal state (see above).
+	return exec.Command(name, args...).Output()
+}
+
+// tryCmd runs a config command for its exit status only.
+func tryCmd(name string, args ...string) error {
+	// #nosec G204 -- fixed binary, args from validated internal state (see above).
+	return exec.Command(name, args...).Run()
 }

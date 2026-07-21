@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"time"
 
 	"6ers3rk/internal/api"
 	"6ers3rk/internal/awg"
@@ -100,7 +101,16 @@ func main() {
 	}
 
 	log.Printf("listening on %s (iface=%s dry_run=%v)", cfg.ListenAddr, cfg.AWGIface, cfg.DryRun)
-	if err := http.ListenAndServe(cfg.ListenAddr, srv.Routes()); err != nil {
+	// ReadHeaderTimeout guards against slow-header (Slowloris) clients. TLS is
+	// terminated by the reverse proxy in front of the panel, so plain HTTP here
+	// is intentional.
+	httpSrv := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           srv.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
+	if err := httpSrv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

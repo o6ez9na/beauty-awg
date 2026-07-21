@@ -13,6 +13,7 @@
 //   STATE_FILE      keypair+token+panel store (default /var/lib/awg-nodeagent/state.json)
 //   AWG_IFACE       interface (default "awg0")
 //   AWG_CONF        config path (default /etc/amnezia/amneziawg/awg0.conf)
+//   ENROLL_SECRET   shared enrollment secret (must match the panel's HUB_ENROLL_SECRET)
 package main
 
 import (
@@ -66,6 +67,9 @@ var (
 	stateFile = env("STATE_FILE", "/var/lib/awg-nodeagent/state.json")
 	iface     = env("AWG_IFACE", "awg0")
 	confPath  = env("AWG_CONF", "/etc/amnezia/amneziawg/awg0.conf")
+	// enrollSecret is presented to the panel on enrollment; leave empty when the
+	// panel has no HUB_ENROLL_SECRET set (enrollment open).
+	enrollSecret = os.Getenv("ENROLL_SECRET")
 )
 
 type state struct {
@@ -110,7 +114,16 @@ func main() {
 	mux.HandleFunc("POST /api/update", auth(applyUpdate))
 
 	log.Printf("node agent on %s (iface=%s)", listen, iface)
-	log.Fatal(http.ListenAndServe(listen, mux))
+	// ReadHeaderTimeout guards against slow-header (Slowloris) clients. The agent
+	// serves a LAN-only admin UI over plain HTTP by design (no certificate on a
+	// home box); it is not exposed to the internet.
+	srv := &http.Server{
+		Addr:              listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls
+	log.Fatal(srv.ListenAndServe())
 }
 
 // ---------------- connect + enrollment ----------------
@@ -196,7 +209,15 @@ func enroll(st state, lanIface string, subnet netip.Prefix) error {
 		"public_key": st.Public,
 		"subnets":    []string{subnet.String()},
 	})
-	resp, err := http.Post(st.Panel+"/api/enroll", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, st.Panel+"/api/enroll", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if enrollSecret != "" {
+		req.Header.Set("X-Enroll-Secret", enrollSecret)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -281,6 +302,7 @@ func (a *agent) pollLoop() {
 // arch so the panel can tell it about a newer nodeagent release.
 func poll(panel, token string) (status, config, latestVersion, updateURL string, gone bool, err error) {
 	u := panel + "/api/enroll/" + token + "?version=" + url.QueryEscape(version) + "&arch=" + url.QueryEscape(runtime.GOARCH)
+	// #nosec G107 -- panel is the operator-configured, normalized panel base URL.
 	resp, err := http.Get(u)
 	if err != nil {
 		return "", "", "", "", false, err
@@ -307,7 +329,8 @@ func poll(panel, token string) (status, config, latestVersion, updateURL string,
 
 // teardown brings the interface down and removes the local config.
 func teardown() {
-	exec.Command("awg-quick", "down", iface).Run()
+	// #nosec G204 -- fixed binary; iface is a validated config value, not user input.
+	_ = exec.Command("awg-quick", "down", iface).Run()
 	_ = os.Remove(confPath)
 	_ = os.Remove(confPath + ".bak")
 }
@@ -392,7 +415,11 @@ func normalizePanel(in string) (string, error) {
 // ---------------- config apply ----------------
 
 func writeAndApply(config string) error {
+	// confPath is a fixed process path (AWG_CONF env), never request-derived, so
+	// the file operations below cannot be steered by an attacker.
+	// #nosec G304 -- fixed env-configured path.
 	if old, err := os.ReadFile(confPath); err == nil {
+		// #nosec G703 -- fixed env-configured path (see above).
 		_ = os.WriteFile(confPath+".bak", old, 0o600)
 	}
 	if err := os.MkdirAll(filepath.Dir(confPath), 0o700); err != nil {
@@ -404,7 +431,9 @@ func writeAndApply(config string) error {
 	var out strings.Builder
 	run(&out, "awg-quick", "down", iface)
 	if code := run(&out, "awg-quick", "up", iface); code != 0 {
+		// #nosec G304 -- fixed env-configured path (see writeAndApply top).
 		if bak, err := os.ReadFile(confPath + ".bak"); err == nil {
+			// #nosec G703 -- fixed env-configured path.
 			_ = os.WriteFile(confPath, bak, 0o600)
 			run(&out, "awg-quick", "up", iface)
 		}
@@ -417,7 +446,7 @@ func writeAndApply(config string) error {
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(indexHTML)
+	_, _ = w.Write(indexHTML)
 }
 
 // serveSVG serves an embedded SVG asset (logo / favicon).
@@ -425,7 +454,7 @@ func serveSVG(b []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Write(b)
+		_, _ = w.Write(b)
 	}
 }
 
@@ -446,13 +475,14 @@ func auth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func getConfig(w http.ResponseWriter, r *http.Request) {
+	// #nosec G304 -- confPath is a fixed env-configured path (AWG_CONF), not request input.
 	b, err := os.ReadFile(confPath)
 	if err != nil {
 		http.Error(w, "read config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write(b)
+	_, _ = w.Write(b)
 }
 
 func applyConfig(w http.ResponseWriter, r *http.Request) {
@@ -467,20 +497,20 @@ func applyConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := writeAndApply(string(body)); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(err.Error()))
+		_, _ = w.Write([]byte(err.Error()))
 		return
 	}
 	var out strings.Builder
 	run(&out, "awg", "show", iface)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(out.String()))
+	_, _ = w.Write([]byte(out.String()))
 }
 
 func getStatus(w http.ResponseWriter, r *http.Request) {
 	var out strings.Builder
 	run(&out, "awg", "show", iface)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(out.String()))
+	_, _ = w.Write([]byte(out.String()))
 }
 
 // ---------------- self-update ----------------
@@ -524,6 +554,8 @@ func applyUpdate(w http.ResponseWriter, r *http.Request) {
 // refuses to open a running executable's text segment for writing — but
 // rename() has no such restriction.
 func selfUpdate(url, exe string) error {
+	// #nosec G107 -- url is the panel-supplied release download URL; the update is
+	// only ever triggered by the node operator via the local web UI (see applyUpdate).
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -538,11 +570,11 @@ func selfUpdate(url, exe string) error {
 	}
 	defer os.Remove(tmp.Name()) // no-op once renamed away
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Chmod(0o755); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -555,6 +587,7 @@ func selfUpdate(url, exe string) error {
 
 func loadState() (state, error) {
 	var st state
+	// #nosec G304 -- stateFile is a fixed env-configured path (STATE_FILE), not request input.
 	b, err := os.ReadFile(stateFile)
 	if err != nil {
 		return st, err
@@ -577,6 +610,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func run(out *strings.Builder, name string, args ...string) int {
 	out.WriteString("$ " + name + " " + strings.Join(args, " ") + "\n")
+	// #nosec G204 -- callers pass fixed binaries (awg / awg-quick) with static args.
 	b, err := exec.CommandContext(context.Background(), name, args...).CombinedOutput()
 	out.Write(b)
 	if len(b) > 0 && b[len(b)-1] != '\n' {

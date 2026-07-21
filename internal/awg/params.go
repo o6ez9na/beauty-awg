@@ -76,6 +76,8 @@ func randUint32(min, max uint32) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
+	// n is in [0, max-min], so the sum stays within uint32 by construction.
+	// #nosec G115 -- bounded above by max (a uint32); no overflow possible.
 	return min + uint32(n.Int64()), nil
 }
 
