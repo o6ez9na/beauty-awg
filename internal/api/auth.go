@@ -100,6 +100,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
+	// HttpOnly + SameSite are always on. Secure is on unless INSECURE_COOKIES is
+	// explicitly set (local, non-TLS development only) — hence it is a variable,
+	// not a literal true.
+	// #nosec G124 -- Secure is configurable by design (see SecureCookies).
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookieName,
 		Value:    s.signToken(id.String()),
@@ -113,7 +118,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1})
+	// Clear the session cookie with the same security attributes it was set with,
+	// so browsers reliably overwrite the original rather than keeping a laxer twin.
+	// #nosec G124 -- Secure is configurable by design (see SecureCookies / handleLogin).
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
+	http.SetCookie(w, &http.Cookie{
+		Name:     cookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.SecureCookies,
+		MaxAge:   -1,
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

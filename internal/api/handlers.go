@@ -52,6 +52,9 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name, lan_iface and at least one subnet required", http.StatusBadRequest)
 		return
 	}
+	if !validIface(w, req.LANIface) {
+		return
+	}
 	subnets := make([]netip.Prefix, 0, len(req.Subnets))
 	for _, s := range req.Subnets {
 		p, err := netip.ParsePrefix(s)
