@@ -29,7 +29,11 @@ func (s *Store) GetHub(ctx context.Context) (awg.Hub, error) {
 	}
 	h.Address, _ = netip.ParseAddr(addr)
 	h.PoolCIDR, _ = netip.ParsePrefix(pool)
+	// H1..H4 are AmneziaWG header magics: uint32 values persisted in int64 columns
+	// (Postgres has no unsigned integers). They round-trip within uint32 range.
+	// #nosec G115 -- values originate as uint32 (see awg.ObfuscationParams).
 	h.Params.H1, h.Params.H2 = uint32(h1), uint32(h2)
+	// #nosec G115 -- see above.
 	h.Params.H3, h.Params.H4 = uint32(h3), uint32(h4)
 	h.Resolver = s.ResolverOn
 	h.ResolverPort = s.ResolverPort

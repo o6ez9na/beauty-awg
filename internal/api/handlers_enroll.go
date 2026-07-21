@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/netip"
 
@@ -20,12 +21,31 @@ type enrollReq struct {
 // handleEnroll registers a node as pending. No secret: the admin approves each
 // request manually in the panel, which is the gate.
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
+	// Gate on the shared enrollment secret. A node presents it in X-Enroll-Secret;
+	// an empty stored secret means enrollment is open (matching the store's
+	// "empty = no secret required" semantics — see SetEnrollSecretIfEmpty).
+	secret, err := s.St.GetEnrollSecret(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if secret != "" &&
+		subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Enroll-Secret")), []byte(secret)) != 1 {
+		http.Error(w, "invalid or missing enrollment secret", http.StatusUnauthorized)
+		return
+	}
+
 	var req enrollReq
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.PublicKey == "" || req.LANIface == "" || len(req.Subnets) == 0 {
 		http.Error(w, "public_key, lan_iface and subnets required", http.StatusBadRequest)
+		return
+	}
+	// lan_iface is templated into awg-quick PostUp shell lines downstream; reject
+	// anything that isn't a plain interface name before it is stored.
+	if !validIface(w, req.LANIface) {
 		return
 	}
 	subnets := make([]netip.Prefix, 0, len(req.Subnets))

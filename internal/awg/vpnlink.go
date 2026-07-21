@@ -94,6 +94,8 @@ func clientDNS(hub Hub, c Client, granted []Grant) string {
 // zlib stream. AmneziaVPN uses Qt's qUncompress to read it back.
 func qCompress(data []byte) []byte {
 	var buf bytes.Buffer
+	// data is a marshalled client config (a few KB); its length always fits uint32.
+	// #nosec G115 -- config payload length is far below math.MaxUint32.
 	_ = binary.Write(&buf, binary.BigEndian, uint32(len(data)))
 	zw, _ := zlib.NewWriterLevel(&buf, zlib.BestCompression)
 	_, _ = zw.Write(data)

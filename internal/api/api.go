@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 
 	"6ers3rk/internal/release"
 	"6ers3rk/internal/service"
@@ -78,6 +79,22 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- helpers ---
+
+// ifaceNameRe matches a valid Linux network-interface name: 1–15 chars (kernel
+// IFNAMSIZ limit) from a conservative set. LAN interface names are templated
+// verbatim into awg-quick PostUp shell lines (see awg.RenderNode), so anything
+// outside this set — spaces, shell metacharacters, newlines — is rejected at the
+// boundary to keep untrusted enrollment input out of a command context.
+var ifaceNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,15}$`)
+
+// validIface reports whether name is a safe interface name, writing a 400 if not.
+func validIface(w http.ResponseWriter, name string) bool {
+	if !ifaceNameRe.MatchString(name) {
+		http.Error(w, "invalid lan_iface (expected a network interface name)", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")

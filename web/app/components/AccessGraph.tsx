@@ -32,7 +32,7 @@ import { configChanged, toast } from "../lib/toast";
 import { humanError } from "../lib/errors";
 import { useTheme } from "../lib/theme";
 import {
-  Group, GROUP_DEF_H, GROUP_DEF_W, Layout, gid, isGroupId, groupGrants,
+  Group, GROUP_DEF_H, GROUP_DEF_W, Layout, gid, groupMinHeight, isGroupId, groupGrants,
   groupedClientIds, memberSeat, newGroupId, parseLayout, serializeLayout, syncPlan,
 } from "../lib/groups";
 import GroupNode from "./GroupNode";
@@ -213,6 +213,9 @@ function Graph({
   // positions without a state updater — updaters must stay pure, and React
   // invokes them twice in development.
   const rfNodesRef = useRef<RFNode[]>([]);
+  // Cards that just left a group, with the absolute position they must land on.
+  // Consumed by the very next node build, then cleared.
+  const detached = useRef<Record<string, XYPosition>>({});
   const [hintOpen, setHintOpen] = useState(true);
   // The handle a connection is being dragged from, while the drag is in flight.
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null);
@@ -439,7 +442,8 @@ function Graph({
     let cn = 0, sn = 0;
     const prevNodes = rfNodesRef.current;
     const prevPos = new Map(prevNodes.map((n) => [n.id, n.position]));
-    const pos = (id: string, def: XYPosition) => prevPos.get(id) ?? layout.current[id] ?? def;
+    const pos = (id: string, def: XYPosition) =>
+      detached.current[id] ?? prevPos.get(id) ?? layout.current[id] ?? def;
     const next: RFNode[] = [
       // React Flow requires a parent to appear before its children.
       ...liveGroups.map((g) => {
@@ -447,7 +451,12 @@ function Graph({
         return {
           id, type: "devgroup",
           position: pos(id, { x: 20, y: 24 + cn++ * 96 }),
-          style: { width: g.w ?? GROUP_DEF_W, height: g.h ?? GROUP_DEF_H },
+          // Never smaller than the member stack: a remembered height from when
+          // the group held fewer devices would otherwise clip the newest ones.
+          style: {
+            width: g.w ?? GROUP_DEF_W,
+            height: Math.max(g.h ?? GROUP_DEF_H, groupMinHeight(g.members.length)),
+          },
           zIndex: connectingFrom ? 20 : id === sel ? 10 : 0,
           data: {
             label: g.name,
@@ -456,6 +465,7 @@ function Graph({
             sel: id === sel, dim: anchor !== null && !connected.has(id),
             candidate: canDrop(id), dragging: id === connectingFrom,
             muted: connectingFrom !== null && id !== connectingFrom && !canDrop(id),
+            minHeight: groupMinHeight(g.members.length),
             onGear: () => setEditingGroup(g.id),
             onResize: (w: number, h: number) => updateGroupRef.current?.(g.id, { w, h }),
           },
@@ -510,6 +520,8 @@ function Graph({
     // every poll makes it rebuild DOM, and an edge rebuild restarts whatever
     // animates inside one. (stringify drops functions, so the per-render
     // callbacks don't register as a difference.)
+    detached.current = {};
+
     const nsig = JSON.stringify(next);
     if (nsig !== nodeSig.current) {
       nodeSig.current = nsig;
@@ -675,15 +687,23 @@ function Graph({
     }
 
     if (current && !hit) {
-      // Dragged out: restore an absolute position so it doesn't jump.
+      // Dragged out: restore an absolute position so it doesn't jump. While the
+      // card was a member React Flow stored it relative to the frame, so the
+      // frame's own position has to be added back.
       const origin = layout.current[gid(current.id)] ?? { x: 0, y: 0 };
-      layout.current = {
-        ...layout.current,
-        [node.id]: {
-          x: Math.round(node.position.x + origin.x),
-          y: Math.round(node.position.y + origin.y),
-        },
+      const abs = {
+        x: Math.round(node.position.x + origin.x),
+        y: Math.round(node.position.y + origin.y),
       };
+      layout.current = { ...layout.current, [node.id]: abs };
+      // The next render seeds a released card's position from the PREVIOUS node
+      // list (see `pos`), which still holds the parent-relative coordinates and
+      // takes precedence over what we just wrote — read as absolute they land
+      // the card near the canvas origin instead of under the cursor. Hand the
+      // absolute position over out of band so it outranks that list exactly
+      // once. (Rewriting the list itself would race React Flow's own drag-stop
+      // update, which rebuilds it from state.)
+      detached.current[node.id] = abs;
       updateGroup(current.id, { members: current.members.filter((m) => m !== clientId) });
     }
   }, [clients, getIntersectingNodes, joinGroup, updateGroup]);

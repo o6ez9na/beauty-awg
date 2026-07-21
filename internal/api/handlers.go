@@ -21,7 +21,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	hs := awg.LatestHandshakes(s.Svc.Applier.IfaceName())
 	for i := range nodes {
 		nodes[i].Online = peerOnline(hs, nodes[i].PublicKey)
 	}
@@ -50,6 +50,9 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" || req.LANIface == "" || len(req.Subnets) == 0 {
 		http.Error(w, "name, lan_iface and at least one subnet required", http.StatusBadRequest)
+		return
+	}
+	if !validIface(w, req.LANIface) {
 		return
 	}
 	subnets := make([]netip.Prefix, 0, len(req.Subnets))
@@ -167,7 +170,7 @@ func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hs := awg.LatestHandshakes(s.Svc.Applier.Iface)
+	hs := awg.LatestHandshakes(s.Svc.Applier.IfaceName())
 	for i := range clients {
 		clients[i].Online = peerOnline(hs, clients[i].PublicKey)
 	}

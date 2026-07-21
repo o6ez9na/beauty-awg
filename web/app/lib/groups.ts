@@ -41,6 +41,15 @@ export function memberSeat(index: number) {
   return { x: GROUP_PAD, y: GROUP_PAD_TOP + index * GROUP_ROW };
 }
 
+/** The height the stack of `count` members actually needs. The frame is sized
+ *  from this and not from the stored height alone: that height was whatever the
+ *  group happened to be when it was last resized, so a member joining afterwards
+ *  would hang out of the bottom of the frame. GROUP_ROW already includes the gap
+ *  under a card, so the last one needs only the bottom padding after it. */
+export function groupMinHeight(count: number): number {
+  return Math.max(GROUP_MIN_H, GROUP_PAD_TOP + count * GROUP_ROW + GROUP_PAD);
+}
+
 /** Reserved key inside the layout object. Node positions are keyed by
  *  "c:<uuid>"/"n:<uuid>", so a "__"-prefixed key can never collide. */
 export const GROUPS_KEY = "__groups";
