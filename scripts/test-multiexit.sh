@@ -39,7 +39,7 @@ n() { ip netns exec "$1" "${@:2}"; }
 # ---------------------------------------------------------------- topology ---
 step "building namespaces"
 
-for ns in mx-hub mx-n1 mx-n2 mx-cA mx-cB mx-cC mx-inet; do
+for ns in mx-hub mx-n1 mx-n2 mx-cA mx-cB mx-cC mx-inet mx-lan; do
 	ip netns add "$ns"
 	n "$ns" ip link set lo up
 done
@@ -56,6 +56,7 @@ link mx-hub h-n2  mx-n2   n2-h
 link mx-hub h-ca  mx-cA   ca-h
 link mx-hub h-cb  mx-cB   cb-h
 link mx-hub h-cc  mx-cC   cc-h
+link mx-n1  n1-lan mx-lan   lan-n1
 # "internet" links
 link mx-hub h-wan mx-inet i-hub
 link mx-n1  n1-wan mx-inet i-n1
@@ -93,12 +94,22 @@ n mx-hub sysctl -qw net.ipv4.conf.default.rp_filter=1
 
 # WireGuard's cryptokey-routing source check, emulated: a peer may only send
 # packets sourced from its own AllowedIPs.
-antispoof() { # antispoof <hub-iface> <peer/32>
-	n mx-hub iptables -A INPUT   -i "$1" ! -s "$2" -j DROP
-	n mx-hub iptables -A FORWARD -i "$1" ! -s "$2" -j DROP
+# Its own chain, entered first from both INPUT and FORWARD: a peer's allowed
+# sources RETURN to carry on through the rest of the ruleset, anything else is
+# dropped. (A plain ACCEPT here would short-circuit the policy rules below it.)
+n mx-hub iptables -N SPOOF
+n mx-hub iptables -A INPUT   -j SPOOF
+n mx-hub iptables -A FORWARD -j SPOOF
+antispoof() { # antispoof <hub-iface> <allowed-src>...
+	local ifc=$1; shift
+	for src in "$@"; do
+		n mx-hub iptables -A SPOOF -i "$ifc" -s "$src" -j RETURN
+	done
+	n mx-hub iptables -A SPOOF -i "$ifc" -j DROP
 }
-antispoof h-n1 10.8.0.2
-antispoof h-n2 10.8.0.3
+# node peers are allowed their /32 AND their LAN subnet, exactly like AllowedIPs
+antispoof h-n1 10.8.0.2 192.168.0.0/24
+antispoof h-n2 10.8.0.3 192.168.1.0/24
 antispoof h-ca 10.8.0.5
 antispoof h-cb 10.8.0.6
 antispoof h-cc 10.8.0.7
@@ -116,7 +127,18 @@ setup_node() { # setup_node <ns> <tun-if> <tun-ip> <wan-if> <wan-ip>
 	n "$ns" sysctl -qw net.ipv4.conf.default.rp_filter=1
 }
 setup_node mx-n1 n1-h 10.8.0.2 n1-wan 203.0.113.1
+# node1's LAN, and the hub route that its AllowedIPs would install
+ip -n mx-n1 addr add 192.168.0.1/24 dev n1-lan
+ip -n mx-lan addr add 192.168.0.10/24 dev lan-n1
+ip -n mx-lan route add default via 192.168.0.1 dev lan-n1
+ip -n mx-hub route add 192.168.0.0/24 dev h-n1 src 10.8.0.1
 setup_node mx-n2 n2-h 10.8.0.3 n2-wan 203.0.113.2
+
+# The hub routes a node's whole LAN prefix at the tunnel; over WireGuard that
+# needs no address resolution at all. On veth it does, and the node owns none of
+# the LAN hosts' addresses, so let it answer for the prefixes it routes.
+n mx-n1 sysctl -qw net.ipv4.conf.n1-h.proxy_arp=1
+n mx-n2 sysctl -qw net.ipv4.conf.n2-h.proxy_arp=1
 
 # WireGuard has no L2 at all: a node hands any packet routed at the pool straight
 # to the hub. veth does have L2, and the hub owns none of the client addresses,
@@ -247,7 +269,7 @@ step "2. return traffic really rides the IPIP tunnel"
 # Disable the node's policy return (the fwmark rule) and replies follow the main
 # table straight back over the tunnel veth, un-encapsulated, carrying an internet
 # source. That is exactly what WireGuard's per-peer source check rejects.
-dropped() { n mx-hub iptables -L FORWARD -nvx | awk '$3=="DROP" && $6=="h-n1" {print $1; exit}'; }
+dropped() { n mx-hub iptables -L SPOOF -nvx | awk '$3=="DROP" && $6=="h-n1" {print $1; exit}'; }
 before=$(dropped)
 n mx-n1 ip rule del fwmark 0x33 lookup 133 pref 1330
 if ping_out mx-cA; then bad "without the IPIP return path cA loses connectivity"
@@ -271,8 +293,11 @@ if ping_out mx-cA; then ok "restoring the fwmark rule restores connectivity"
 else bad "restoring the fwmark rule restores connectivity"; fi
 
 # And with the tunnel return in place, nothing a node sends is ever dropped by
-# that check: the outer source is its own /32.
-sp=$(n mx-hub iptables -L INPUT -nvx | awk '$3=="DROP" && $6=="h-n1" {print $1; exit}')
+# that check: the outer source is its own /32. Zero the counters first — the
+# probe above deliberately generated drops.
+n mx-hub iptables -Z SPOOF
+ping_out mx-cA >/dev/null 2>&1
+sp=$(dropped)
 if [ "$sp" -eq 0 ]; then ok "tunnelled returns pass the hub source check untouched"
 else bad "tunnelled returns pass the hub source check untouched (dropped $sp)"; fi
 
@@ -440,6 +465,73 @@ else bad "PostDown completes despite an already-removed rule: $err"; fi
 if n mx-n2 ip link show ipip-hub >/dev/null 2>&1; then
 	bad "the tunnel is gone after the partial teardown"
 else ok "the tunnel is gone after the partial teardown"; fi
+
+step "11. upgrading a node that is still on the pre-IPIP config"
+
+# How a real upgrade lands: the panel starts emitting the new config, the agent
+# writes it to disk and only THEN runs `awg-quick down` — so the NEW PostDown
+# executes against state the OLD PostUp created. Everything it tries to remove
+# is therefore missing. What must survive it is access to the node's LAN.
+if n mx-cA ping -c 2 -i 0.3 -W 2 192.168.0.10 >/dev/null 2>&1; then
+	ok "baseline: cA reaches the LAN behind node1"
+else bad "baseline: cA reaches the LAN behind node1"; fi
+
+# Roll node1 back to the pre-IPIP world: no tunnel, and the older masquerade
+# form that this branch replaced (-o LAN instead of ! -o %i).
+node_postdown mx-n1
+n mx-n1 iptables -t nat -D POSTROUTING -s 10.8.0.0/24 ! -o n1-h -j MASQUERADE
+n mx-n1 iptables -D FORWARD -i n1-h ! -o n1-h -j ACCEPT
+n mx-n1 iptables -D FORWARD ! -i n1-h -o n1-h -j ACCEPT
+n mx-n1 iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o n1-lan -j MASQUERADE
+n mx-n1 iptables -A FORWARD -i n1-h -j ACCEPT
+n mx-n1 iptables -A FORWARD -o n1-h -j ACCEPT
+# and the hub back to the single-exit mechanism it used to drive
+hub_exit_flush
+n mx-hub ip link del awgex2
+n mx-hub ip route replace default dev h-n1 table 51
+n mx-hub ip rule add from 10.8.0.5/32 lookup 51 pref 5100
+
+if n mx-cA ping -c 2 -i 0.3 -W 2 192.168.0.10 >/dev/null 2>&1; then
+	ok "old-style node still serves its LAN (the state we upgrade FROM)"
+else bad "old-style node still serves its LAN (the state we upgrade FROM)"; fi
+
+# Now the upgrade itself. awg-quick stops at the first failing PostDown line, so
+# run the WHOLE PostDown that way — including the masquerade/forward lines that
+# precede the IPIP block and, unlike it, carry no `|| true`. Against an older
+# node those lines describe rules that were never created, so the teardown is
+# expected to abort partway; what matters is that the node still comes back.
+# NB: the subshell must not be the left side of `||` — bash suppresses errexit
+# inside a command whose status is being tested, which would silently make this
+# check pass no matter what. Read $? on the next line instead.
+set +e
+(
+	set -e
+	n mx-n1 iptables -t nat -D POSTROUTING -s 10.8.0.0/24 ! -o n1-h -j MASQUERADE
+	n mx-n1 iptables -D FORWARD -i n1-h ! -o n1-h -j ACCEPT
+	n mx-n1 iptables -D FORWARD ! -i n1-h -o n1-h -j ACCEPT
+	node_postdown mx-n1
+) >/dev/null 2>&1
+down_rc=$?
+set -e
+if [ "$down_rc" -ne 0 ]; then
+	ok "PostDown aborts on the pre-IPIP node, as expected (exit $down_rc)"
+else bad "PostDown was expected to abort against the old rule set"; fi
+node_postup mx-n1 n1-h 10.8.0.2
+# the hub reconciles to the new mechanism
+n mx-hub ip route del default dev h-n1 table 51 2>/dev/null || true
+hub_exit_dev awgex2 10.8.0.2 1002
+hub_exit_flush
+hub_exit_rule 10.8.0.5 1002
+hub_exit_rule 10.8.0.6 1003
+
+if n mx-cA ping -c 2 -i 0.3 -W 2 192.168.0.10 >/dev/null 2>&1; then
+	ok "LAN access survives the upgrade despite the aborted teardown"
+else bad "LAN access survives the upgrade despite the aborted teardown"; fi
+if ping_out mx-cA; then ok "and the node-exit now works through the new IPIP path"
+else bad "and the node-exit now works through the new IPIP path"; fi
+if [ -z "$(n mx-hub ip route show table 51 2>/dev/null)" ]; then
+	ok "the old table 51 default route is gone"
+else bad "the old table 51 default route is gone"; fi
 
 # ------------------------------------------------------------------ summary ---
 printf '\n\033[1m%d passed, %d failed\033[0m\n' "$PASS" "$FAIL"

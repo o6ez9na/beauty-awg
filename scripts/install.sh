@@ -575,6 +575,10 @@ update_node() {
   info "existing node agent found — $(c '1;36' updating) (not reinstalling)"
   # Reuse install-time method; default to a prebuilt binary (source fallback built in).
   : "${NODE_INSTALL_METHOD:=binary}"
+  # Nodes pull their awg config from the panel, so an upgraded panel can hand a
+  # node a config using features the host lacks. Re-check them here too, or the
+  # node quietly keeps falling back to its previous config.
+  ensure_ipip
   provision_nodeagent
   systemctl daemon-reload
   systemctl restart awg-nodeagent
