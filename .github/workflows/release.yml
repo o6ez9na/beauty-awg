@@ -172,7 +172,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           check-latest: true
@@ -215,7 +215,7 @@ jobs:
       # AmneziaWG userspace impl ref to build from (bump to pin a release).
       AWG_GO_REF: master
     steps:
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           check-latest: true
