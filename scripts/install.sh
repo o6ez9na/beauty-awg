@@ -132,6 +132,21 @@ host_ip() {
 # EnvironmentFile, which uses the same rules).
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# Best guess for the LAN the node should expose: the first RFC1918 IPv4 on an
+# interface that is NOT the default-route (WAN) one. On a router the default
+# route leaves via the WAN, so auto-detect-by-default-route picks the WAN subnet
+# — wrong. This offers the LAN bridge (e.g. br0 192.168.1.1/24) as the prompt
+# default instead. Prints "<iface> <cidr>" or nothing.
+lan_guess() {
+  local wan
+  wan="$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)"
+  ip -o -4 addr show 2>/dev/null | awk -v wan="$wan" '
+    $2!=wan && $2!="lo" {
+      split($4,a,"/"); ip=a[1]
+      if (ip ~ /^192\.168\./ || ip ~ /^10\./ || ip ~ /^172\.(1[6-9]|2[0-9]|3[01])\./) { print $2, $4; exit }
+    }'
+}
+
 # --- already-installed detection -------------------------------------------
 # A panel is "installed" once its repo is cloned AND configured (.env written).
 panel_installed() { [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/.env" ]; }
@@ -667,6 +682,16 @@ install_node() {
   ask_secret "Set a password for the node web UI (user: admin)" webpw
   [ -n "$webpw" ] || die "web UI password required"
 
+  # LAN the node exposes. Blank = auto-detect at enroll (fine on a plain server;
+  # WRONG on a router, where auto-detect follows the default route out the WAN).
+  # Prefilled with a best guess (first RFC1918 iface that isn't the WAN).
+  local guess def_if def_sn
+  guess="$(lan_guess)"; def_if="${guess%% *}"; def_sn="${guess#* }"
+  [ "$def_sn" = "$guess" ] && def_sn=""
+  info "leave blank to auto-detect the LAN at enroll (not reliable on a router)"
+  ask "LAN interface the node exposes"      NODE_LAN_IFACE "$def_if"
+  ask "LAN subnet (CIDR) to route to clients" NODE_SUBNET   "$def_sn"
+
   install_nodeagent "$webpw"
 
   local ip; ip="$(host_ip)"
@@ -934,6 +959,10 @@ AWG_CONF=$AWG_CONF_DIR/$AWG_IFACE.conf
 NODE_PASSWORD=$(shell_quote "$webpw")
 NODE_LISTEN=:8088
 EOF
+  # Manual LAN override (essential on a router — see lan_guess). Empty = the
+  # agent auto-detects at enroll.
+  [ -n "${NODE_SUBNET:-}" ]    && echo "NODE_SUBNET=$(shell_quote "$NODE_SUBNET")" >>"$ENV_FILE"
+  [ -n "${NODE_LAN_IFACE:-}" ] && echo "NODE_LAN_IFACE=$(shell_quote "$NODE_LAN_IFACE")" >>"$ENV_FILE"
   # No kernel module: force awg-quick down the userspace amneziawg-go path.
   if [ -n "$AWG_USERSPACE" ]; then
     echo "WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go" >>"$ENV_FILE"

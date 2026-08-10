@@ -150,7 +150,7 @@ func getState(w http.ResponseWriter, r *http.Request) {
 		UpdateAvailable: a.updateURL != "",
 	}
 	a.mu.Unlock()
-	if ifc, sn, err := detectLAN(); err == nil {
+	if ifc, sn, err := resolveLAN(); err == nil {
 		resp.Iface = ifc
 		resp.Subnet = sn.String()
 	}
@@ -172,7 +172,7 @@ func connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ifc, subnet, err := detectLAN()
+	ifc, subnet, err := resolveLAN()
 	if err != nil {
 		http.Error(w, "could not auto-detect LAN: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -363,6 +363,30 @@ func (a *agent) reset() {
 }
 
 // ---------------- LAN auto-detection ----------------
+
+// resolveLAN returns the LAN interface + subnet to advertise to the hub.
+// NODE_SUBNET (and NODE_LAN_IFACE) override auto-detection. This is required on
+// a router: detectLAN follows the default route, which on a router points OUT
+// the WAN, so it would advertise the WAN subnet instead of the LAN bridge. Set
+// both env vars there (e.g. NODE_SUBNET=192.168.1.0/24 NODE_LAN_IFACE=br0).
+func resolveLAN() (string, netip.Prefix, error) {
+	sn := strings.TrimSpace(os.Getenv("NODE_SUBNET"))
+	if sn == "" {
+		return detectLAN()
+	}
+	p, err := netip.ParsePrefix(sn)
+	if err != nil {
+		return "", netip.Prefix{}, fmt.Errorf("bad NODE_SUBNET %q: %w", sn, err)
+	}
+	ifc := strings.TrimSpace(os.Getenv("NODE_LAN_IFACE"))
+	if ifc == "" {
+		// Fall back to the detected iface so lan_iface is never empty (the hub
+		// rejects an empty one), but the WAN iface it may return is wrong for a
+		// router's masquerade — hence set NODE_LAN_IFACE explicitly there.
+		ifc, _, _ = detectLAN()
+	}
+	return ifc, p.Masked(), nil
+}
 
 // detectLAN finds the primary interface (the one with the default route) and its
 // IPv4 subnet, e.g. ("ens18", 192.168.1.0/24).

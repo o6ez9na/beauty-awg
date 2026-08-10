@@ -54,11 +54,30 @@ func (s *Store) EnrollNode(ctx context.Context, name, hostname, lanIface, pubkey
 			if st == "rejected" {
 				status = "pending"
 			}
-			_, err := tx.Exec(ctx,
+			if _, err := tx.Exec(ctx,
 				`UPDATE nodes SET enroll_token=$2, hostname=$3, lan_iface=$4,
 				        status = CASE WHEN status='rejected' THEN 'pending' ELSE status END
-				 WHERE id=$1`, id, token, hostname, lanIface)
-			return err
+				 WHERE id=$1`, id, token, hostname, lanIface); err != nil {
+				return err
+			}
+			// Replace the node's declared subnets on every re-announce: the node is
+			// authoritative for what LAN it exposes, so a corrected subnet (e.g. a
+			// router first mis-detecting its WAN, then fixed via NODE_SUBNET) must
+			// propagate. Skipped when the announce carries none, so an empty retry
+			// can't wipe a good set.
+			if len(subnets) > 0 {
+				if _, err := tx.Exec(ctx, `DELETE FROM node_subnets WHERE node_id=$1`, id); err != nil {
+					return err
+				}
+				for _, sn := range subnets {
+					if _, err := tx.Exec(ctx,
+						`INSERT INTO node_subnets(node_id, subnet) VALUES ($1, $2::cidr)`,
+						id, sn.String()); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		case pgx.ErrNoRows:
 			token = newToken()
 			status = "pending"
