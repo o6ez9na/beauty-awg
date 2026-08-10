@@ -713,14 +713,20 @@ install_go() {
 # Linux reports plain "mips" in `uname -m` for both endiannesses, so the Go
 # arch (mips vs mipsle) has to come from somewhere else: byte 5 of any local
 # ELF binary is EI_DATA — 1 = little-endian, 2 = big-endian.
+#
+# The byte is extracted with dd (skip 5, read 1) and octal-dumped with `od -b`
+# — plain octal is the one od mode BusyBox always ships. The earlier `od -j5
+# -N1 -tu1` combo relies on GNU-only flags that BusyBox od silently ignores,
+# which is why the probe came back empty on Entware and mips detection failed.
+# Set NODEAGENT_ARCH (mips|mipsle|...) to bypass the probe entirely.
 mips_go_arch() {
   local probe b
   for probe in /bin/sh /bin/busybox "$0"; do
     [ -r "$probe" ] || continue
-    b="$(od -An -tu1 -j5 -N1 "$probe" 2>/dev/null | tr -d '[:space:]')"
+    b="$(dd if="$probe" bs=1 skip=5 count=1 2>/dev/null | od -An -b 2>/dev/null | tr -dc '0-9')"
     case "$b" in
-      1) echo mipsle; return 0 ;;
-      2) echo mips; return 0 ;;
+      *1) echo mipsle; return 0 ;;
+      *2) echo mips; return 0 ;;
     esac
   done
   return 1
@@ -729,6 +735,7 @@ mips_go_arch() {
 # Map `uname -m` to the Go arch used in release asset names. Echoes nothing on
 # an unsupported arch (caller decides whether to fall back to source).
 nodeagent_arch() {
+  if [ -n "${NODEAGENT_ARCH:-}" ]; then echo "$NODEAGENT_ARCH"; return 0; fi
   case "$(uname -m)" in
     x86_64) echo amd64 ;;
     aarch64|arm64) echo arm64 ;;
