@@ -467,6 +467,13 @@ func writeAndApply(config string) error {
 	if err := os.WriteFile(confPath, []byte(config), 0o600); err != nil {
 		return err
 	}
+	// awg-quick must be resolvable before we touch the interface. Without this the
+	// down/up below fail deep inside exec on every poll, turning a missing
+	// dependency into a tight retry-storm with a confusing "not found" pointing at
+	// awg-quick rather than its bash interpreter. Surface it once, clearly.
+	if _, err := exec.LookPath("awg-quick"); err != nil {
+		return fmt.Errorf("awg-quick not found in PATH (%s): install amneziawg-tools + bash before applying config", os.Getenv("PATH"))
+	}
 	var out strings.Builder
 	target := quickArg()
 	run(&out, "awg-quick", "down", target)

@@ -362,6 +362,15 @@ download_awg_tools_binary() {
   # cp+chmod rather than install(1): busybox does not always carry that applet.
   cp "$tmp/awg" "$TOOL_BIN_DIR/awg" && chmod 755 "$TOOL_BIN_DIR/awg"
   cp "$tmp/awg-quick" "$TOOL_BIN_DIR/awg-quick" && chmod 755 "$TOOL_BIN_DIR/awg-quick"
+  # Entware keeps bash at /opt/bin/bash, but the tarball's awg-quick hard-codes
+  # `#!/bin/bash`. With no /bin/bash the kernel can't load the interpreter and
+  # every awg-quick call dies with "not found", so awg0 never comes up (and
+  # `awg show` then reports "Protocol not supported"). Repoint the shebang at the
+  # bash we just installed.
+  if [ -n "$ENTWARE" ]; then
+    local bash_path; bash_path="$(command -v bash || echo /opt/bin/bash)"
+    sed -i "1s|^#!.*|#!${bash_path}|" "$TOOL_BIN_DIR/awg-quick"
+  fi
   mkdir -p "$DOC_DIR/amneziawg-tools"
   cp "$tmp/COPYING" "$DOC_DIR/amneziawg-tools/COPYING" 2>/dev/null || true
   cp "$tmp/README.source" "$DOC_DIR/amneziawg-tools/README.source" 2>/dev/null || true
@@ -693,6 +702,7 @@ install_node() {
   ask "LAN subnet (CIDR) to route to clients" NODE_SUBNET   "$def_sn"
 
   install_nodeagent "$webpw"
+  write_ndm_netfilter_hook
 
   local ip; ip="$(host_ip)"
   ok "node agent installed."
@@ -938,6 +948,71 @@ EOF
   chmod 755 "$INIT_SCRIPT"
 }
 
+# Refuse to start the agent until every dependency it will call at first
+# config-apply is actually present and runnable. The agent applies its config
+# the moment the panel approves it; if awg-quick (or its bash interpreter, or
+# ip) is missing at that point, it retries in a tight loop and looks broken.
+# Failing loudly here — before the service is enabled — turns a confusing
+# runtime retry-storm into one clear install-time error.
+node_preflight() {
+  local missing="" q interp
+  command -v awg       >/dev/null 2>&1 || missing="$missing awg"
+  command -v awg-quick >/dev/null 2>&1 || missing="$missing awg-quick"
+  command -v ip        >/dev/null 2>&1 || missing="$missing ip"
+  # Userspace backend must exist when there's no kernel module (always on Entware).
+  if [ -n "$AWG_USERSPACE" ] || [ -n "$ENTWARE" ]; then
+    command -v amneziawg-go >/dev/null 2>&1 || missing="$missing amneziawg-go"
+  fi
+  [ -z "$missing" ] || die "node dependencies missing:$missing — install aborted before starting the agent."
+
+  # awg-quick is a bash script; verify its shebang interpreter exists AND is
+  # executable. A missing interpreter makes the kernel report "awg-quick: not
+  # found" (pointing at the script, not bash), which is exactly what stalls a
+  # Keenetic node. The Entware shebang fix runs in download_awg_tools_binary;
+  # this is the backstop that proves it took.
+  q="$(command -v awg-quick)"
+  interp="$(sed -n '1s/^#![[:space:]]*\([^[:space:]]*\).*/\1/p' "$q")"
+  if [ -n "$interp" ] && [ ! -x "$interp" ]; then
+    die "awg-quick needs '$interp' but it is missing/not executable (Entware ships bash at /opt/bin/bash). Install it or fix the shebang."
+  fi
+}
+
+# ndm (Keenetic's supervisor) rebuilds netfilter on WAN/link changes and flushes
+# rules it does not own — taking the tunnel's FORWARD/nat/mangle rules with it,
+# so the node stops forwarding silently minutes later or after a WAN flap. ndm
+# runs every executable in /opt/etc/ndm/netfilter.d/ on each rebuild; this hook
+# re-applies the awg0 config's PostUp lines there. Entware-only.
+write_ndm_netfilter_hook() {
+  [ -n "$ENTWARE" ] || return 0
+  local dir=/opt/etc/ndm/netfilter.d hook
+  hook="$dir/50-awg-nodeagent.sh"
+  mkdir -p "$dir"
+  cat >"$hook" <<EOF
+#!/bin/sh
+# Re-apply the awg0 tunnel's PostUp firewall rules after ndm flushes netfilter.
+# Installed by the 6ers3rk node installer.
+CONF=$AWG_CONF_DIR/$AWG_IFACE.conf
+IFACE=$AWG_IFACE
+EOF
+  cat >>"$hook" <<'EOF'
+# ndm calls hooks for several table types; only act on the iptables rebuild.
+[ "$type" = "iptables" ] || exit 0
+[ -f "$CONF" ] || exit 0
+# Nothing to restore if the interface itself is down (agent not up yet).
+ip link show "$IFACE" >/dev/null 2>&1 || exit 0
+export PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+# Re-run each PostUp line. These append (`-A`); ndm has just flushed, so this
+# restores rather than duplicates. Failures are ignored — a partial restore
+# still beats none.
+sed -n 's/^PostUp *= *//p' "$CONF" | while IFS= read -r cmd; do
+  [ -n "$cmd" ] && eval "$cmd" >/dev/null 2>&1
+done
+exit 0
+EOF
+  chmod 755 "$hook"
+  ok "ndm netfilter hook installed ($hook) — rules survive WAN flaps"
+}
+
 # install_nodeagent <web_password>
 # Installs the agent as a service (systemd, or an Entware init script on
 # routers). The node's panel is set later via the web UI (enter panel IP ->
@@ -946,6 +1021,7 @@ install_nodeagent() {
   local webpw="$1"
 
   provision_nodeagent
+  node_preflight
 
   umask 077
   mkdir -p "$(dirname "$ENV_FILE")" "$(dirname "$STATE_FILE")"
@@ -963,8 +1039,17 @@ EOF
   # agent auto-detects at enroll.
   [ -n "${NODE_SUBNET:-}" ]    && echo "NODE_SUBNET=$(shell_quote "$NODE_SUBNET")" >>"$ENV_FILE"
   [ -n "${NODE_LAN_IFACE:-}" ] && echo "NODE_LAN_IFACE=$(shell_quote "$NODE_LAN_IFACE")" >>"$ENV_FILE"
-  # No kernel module: force awg-quick down the userspace amneziawg-go path.
-  if [ -n "$AWG_USERSPACE" ]; then
+  # awg-quick shells out to ip/iptables/sysctl/awg. On Keenetic those live in
+  # /opt/sbin (ip-full — busybox's `ip` can't do `ip rule fwmark`), which is NOT
+  # in ndm's default PATH, so awg-quick's rules silently fail. Pin a full PATH so
+  # the agent (and the awg-quick it forks) always finds them. The init script
+  # exports the same; this covers systemd and any manual sourcing of the env.
+  echo 'PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin' >>"$ENV_FILE"
+  # No kernel module on a router — awg-quick must use the userspace backend, or
+  # it tries `ip link add type amneziawg` and fails. Always set it on Entware
+  # (there is never a kernel module there); elsewhere only when userspace was the
+  # chosen/forced backend.
+  if [ -n "$AWG_USERSPACE" ] || [ -n "$ENTWARE" ]; then
     echo "WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go" >>"$ENV_FILE"
   fi
   svc_install
