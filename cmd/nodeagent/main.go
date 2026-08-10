@@ -327,10 +327,25 @@ func poll(panel, token string) (status, config, latestVersion, updateURL string,
 	return out.Status, out.Config, out.LatestVersion, out.UpdateURL, false, nil
 }
 
+// quickArg is what awg-quick gets pointed at. awg-quick accepts either a bare
+// interface name — which it resolves inside its own compiled-in config dir,
+// /etc/amnezia/amneziawg — or a path to a .conf file, taking the interface
+// name from the basename. Nodes whose config lives elsewhere need the path
+// form: on Entware routers (Keenetic) / is read-only and /etc is a tmpfs
+// rebuilt every boot, so the config has to sit under /opt.
+// The path is only used when the basename agrees with AWG_IFACE, so a
+// deliberately mismatched pair still brings up the interface it names.
+func quickArg() string {
+	if filepath.Base(confPath) == iface+".conf" {
+		return confPath
+	}
+	return iface
+}
+
 // teardown brings the interface down and removes the local config.
 func teardown() {
-	// #nosec G204 -- fixed binary; iface is a validated config value, not user input.
-	_ = exec.Command("awg-quick", "down", iface).Run()
+	// #nosec G204 -- fixed binary; the arg is a validated config value, not user input.
+	_ = exec.Command("awg-quick", "down", quickArg()).Run()
 	_ = os.Remove(confPath)
 	_ = os.Remove(confPath + ".bak")
 }
@@ -429,13 +444,14 @@ func writeAndApply(config string) error {
 		return err
 	}
 	var out strings.Builder
-	run(&out, "awg-quick", "down", iface)
-	if code := run(&out, "awg-quick", "up", iface); code != 0 {
+	target := quickArg()
+	run(&out, "awg-quick", "down", target)
+	if code := run(&out, "awg-quick", "up", target); code != 0 {
 		// #nosec G304 -- fixed env-configured path (see writeAndApply top).
 		if bak, err := os.ReadFile(confPath + ".bak"); err == nil {
 			// #nosec G703 -- fixed env-configured path.
 			_ = os.WriteFile(confPath, bak, 0o600)
-			run(&out, "awg-quick", "up", iface)
+			run(&out, "awg-quick", "up", target)
 		}
 		return fmt.Errorf("%s", out.String())
 	}
@@ -545,8 +561,26 @@ func applyUpdate(w http.ResponseWriter, r *http.Request) {
 	// took — a manual restart picks it up.
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		_ = exec.Command("systemctl", "restart", "awg-nodeagent").Run()
+		restartSelf()
 	}()
+}
+
+// restartSelf asks the local service manager to restart the agent onto the
+// freshly swapped binary. systemd covers ordinary Linux nodes; Keenetic and
+// other Entware routers have no systemd, so fall back to the Entware init
+// script. If neither exists the swap still took and a manual restart picks it up.
+func restartSelf() {
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		if err := exec.Command("systemctl", "restart", "awg-nodeagent").Run(); err == nil {
+			return
+		}
+	}
+	for _, script := range []string{"/opt/etc/init.d/S99awg-nodeagent", "/etc/init.d/awg-nodeagent"} {
+		if _, err := os.Stat(script); err == nil {
+			_ = exec.Command(script, "restart").Run()
+			return
+		}
+	}
 }
 
 // selfUpdate downloads url to a temp file next to exe and atomically renames

@@ -50,6 +50,44 @@ curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/ins
 
 Replace `YOURUSER` with your GitHub repo (or set `REPO_URL=` env before running).
 
+### Nodes on Keenetic (Entware)
+
+A Keenetic router can be a node. Prepare it once, then run the normal installer:
+
+```sh
+opkg update && opkg install bash curl ca-bundle          # on the router, over SSH
+curl -fsSL https://raw.githubusercontent.com/o6ez9na/beauty-awg/main/scripts/install.sh | bash -s -- node
+```
+
+What differs from a systemd host — the installer detects `opkg` and switches
+automatically:
+
+- Everything lands under `/opt` (`/opt/bin`, `/opt/etc/awg-nodeagent.env`,
+  config in `/opt/etc/amnezia/amneziawg`). The firmware's rootfs is read-only
+  and `/etc` is a tmpfs rebuilt at boot, so nothing outside `/opt` would last.
+- The service is `/opt/etc/init.d/S99awg-nodeagent` (started at boot by Entware's
+  `rc.unslung`), with a small supervisor loop standing in for systemd's
+  `Restart=on-failure`. `start|stop|restart|check`.
+- The AmneziaWG **backend is always userspace** (`amneziawg-go`): a router
+  kernel has no headers, so the module can't be built.
+- Panel mode is refused — it needs Docker and Postgres.
+
+Each release ships `nodeagent-<version>-linux-<goarch>` for `amd64`, `arm64`,
+`mipsle` and `mips` (plus Windows), and `amneziawg-go` + `amneziawg-tools`
+(`awg`, `awg-quick`) for the same set. That covers all three Keenetic Entware
+targets: `aarch64-3.10` → `arm64`, `mipsel-3.4` → `mipsle`, `mips-3.4` → `mips`.
+The MIPS Go builds use `GOMIPS=softfloat` (those SoCs have no usable FPU); the
+MIPS `awg` is cross-compiled and statically linked, so it doesn't care which
+libc the router runs.
+
+`uname -m` says plain `mips` on both endiannesses, so the installer reads
+EI_DATA (byte 5) of a local ELF to pick `mips` vs `mipsle`. In-place update from
+the node's own web UI restarts via systemd, falling back to the Entware init
+script.
+
+Caveat: the node needs `/dev/net/tun`, which on Keenetic comes from the
+firmware's VPN components — the installer warns if it is missing.
+
 ### Uninstall
 
 ```bash

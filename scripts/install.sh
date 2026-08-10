@@ -24,7 +24,6 @@ LEGACY_INSTALL_DIRS="${LEGACY_INSTALL_DIRS:-/opt/beautifulwg /opt/beauty-awg}"
 PANEL_IMAGE_API="${PANEL_IMAGE_API:-ghcr.io/${REPO_SLUG}/panel-api}"
 PANEL_IMAGE_WEB="${PANEL_IMAGE_WEB:-ghcr.io/${REPO_SLUG}/panel-web}"
 AWG_IFACE="${AWG_IFACE:-awg0}"
-AWG_CONF_DIR="/etc/amnezia/amneziawg"
 # Set to 1 when we fall back to the userspace backend (no kernel module).
 AWG_USERSPACE=""
 
@@ -57,20 +56,91 @@ ask_secret() {
 # --- distro detection ------------------------------------------------------
 if command -v apt-get >/dev/null 2>&1; then PKG=apt
 elif command -v dnf >/dev/null 2>&1; then PKG=dnf
-else die "unsupported distro (need apt or dnf)."; fi
+elif command -v opkg >/dev/null 2>&1; then PKG=opkg
+else die "unsupported distro (need apt, dnf or opkg)."; fi
 
+OPKG_UPDATED=""
 pkg_install() {
   case "$PKG" in
     apt) DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" ;;
     dnf) dnf install -y "$@" ;;
+    opkg)
+      [ -n "$OPKG_UPDATED" ] || { opkg update >/dev/null && OPKG_UPDATED=1; }
+      # Entware package sets differ per target; a missing optional package must
+      # not abort the install, so each one is tried on its own.
+      local p
+      for p in "$@"; do opkg install "$p" >/dev/null 2>&1 || warn "opkg: $p unavailable"; done
+      ;;
   esac
 }
+
+# --- install layout --------------------------------------------------------
+# Entware (Keenetic and other routers) keeps everything under /opt, usually on
+# external storage: the firmware's rootfs is read-only and /etc is a tmpfs
+# rebuilt on every boot, so nothing written outside /opt survives a reboot.
+# There is no systemd either — boot-time services are /opt/etc/init.d/S* scripts
+# run by rc.unslung.
+if [ "$PKG" = opkg ]; then
+  ENTWARE=1
+  BIN_DIR=/opt/bin              # node agent
+  TOOL_BIN_DIR=/opt/bin         # awg, awg-quick, amneziawg-go
+  DOC_DIR=/opt/share/doc
+  ENV_FILE=/opt/etc/awg-nodeagent.env
+  STATE_FILE=/opt/var/lib/awg-nodeagent/state.json
+  AWG_CONF_DIR="/opt/etc/amnezia/amneziawg"
+  INIT_SCRIPT=/opt/etc/init.d/S99awg-nodeagent
+else
+  ENTWARE=""
+  BIN_DIR=/usr/local/bin
+  TOOL_BIN_DIR=/usr/bin
+  DOC_DIR=/usr/share/doc
+  ENV_FILE=/etc/awg-nodeagent.env
+  STATE_FILE=/var/lib/awg-nodeagent/state.json
+  AWG_CONF_DIR="/etc/amnezia/amneziawg"
+  INIT_SCRIPT=""
+fi
+
+# --- service control (systemd or Entware init script) ----------------------
+svc_install() { # svc_install — write the unit/init script for the node agent
+  if [ -n "$ENTWARE" ]; then write_init_script; else write_systemd_unit; fi
+}
+svc_enable_start() {
+  if [ -n "$ENTWARE" ]; then
+    "$INIT_SCRIPT" start
+  else
+    systemctl daemon-reload
+    systemctl enable --now awg-nodeagent
+  fi
+}
+svc_restart() {
+  if [ -n "$ENTWARE" ]; then
+    "$INIT_SCRIPT" restart
+  else
+    systemctl daemon-reload
+    systemctl restart awg-nodeagent
+  fi
+}
+
+# First non-loopback IPv4 of this host. busybox has no `hostname -I`, so fall
+# back to the address the default route picks.
+host_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}' | grep -q . && { hostname -I | awk '{print $1}'; return; }
+  ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1
+}
+
+# Single-quote a value for a shell-sourced env file (and systemd's
+# EnvironmentFile, which uses the same rules).
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # --- already-installed detection -------------------------------------------
 # A panel is "installed" once its repo is cloned AND configured (.env written).
 panel_installed() { [ -d "$INSTALL_DIR/.git" ] && [ -f "$INSTALL_DIR/.env" ]; }
-# A node is "installed" once the agent's systemd unit exists.
-node_installed()  { [ -f /etc/systemd/system/awg-nodeagent.service ]; }
+# A node is "installed" once the agent's service definition exists — a systemd
+# unit, or an Entware init script on routers.
+node_installed()  {
+  [ -f /etc/systemd/system/awg-nodeagent.service ] && return 0
+  [ -n "$INIT_SCRIPT" ] && [ -f "$INIT_SCRIPT" ]
+}
 
 # --- mode selection --------------------------------------------------------
 MODE="${1:-${INSTALL_MODE:-}}"
@@ -87,6 +157,10 @@ if [ -z "$MODE" ]; then
 fi
 [ "$MODE" = panel ] || [ "$MODE" = node ] || die "MODE must be panel or node (got: $MODE)"
 info "mode: $(c '1;36' "$MODE")"
+if [ -n "$ENTWARE" ]; then
+  info "Entware detected — installing under /opt (no systemd)"
+  [ "$MODE" = node ] || die "the panel needs Docker + Postgres; a router can only run a node."
+fi
 
 # --- AmneziaWG -------------------------------------------------------------
 # Built from source via DKMS so it works on Debian AND Ubuntu (the Ubuntu-only
@@ -102,12 +176,14 @@ kernel_headers_available() {
   case "$PKG" in
     apt) apt-cache show "linux-headers-$(uname -r)" >/dev/null 2>&1 ;;
     dnf) dnf list "kernel-devel-$(uname -r)" >/dev/null 2>&1 ;;
+    # A router's firmware ships no headers, and an empty case would return 0.
+    opkg) return 1 ;;
   esac
 }
 
-# Build the userspace AmneziaWG backend (amneziawg-go) into /usr/bin.
+# Build the userspace AmneziaWG backend (amneziawg-go) into $TOOL_BIN_DIR.
 AWG_GO_REF="${AWG_GO_REF:-master}"
-# Download a prebuilt amneziawg-go from our GitHub Releases into /usr/bin.
+# Download a prebuilt amneziawg-go from our GitHub Releases into $TOOL_BIN_DIR.
 # Honors NODEAGENT_VERSION (release tag) or resolves the latest release.
 download_awg_go_binary() {
   local arch; arch="$(nodeagent_arch)" || { warn "no prebuilt amneziawg-go for arch $(uname -m)"; return 1; }
@@ -128,20 +204,20 @@ download_awg_go_binary() {
   # place: on an update, amneziawg-go may be running as a child of awg-quick,
   # and the kernel refuses to open a currently-executing file for writing
   # (ETXTBSY). rename() has no such restriction.
-  local tmp; tmp="$(mktemp /usr/bin/.amneziawg-go.XXXXXX)"
+  local tmp; tmp="$(mktemp "$TOOL_BIN_DIR/.amneziawg-go.XXXXXX")"
   if ! curl -fsSL "$url" -o "$tmp"; then
     warn "download failed"; rm -f "$tmp"; return 1
   fi
   chmod +x "$tmp"
-  mv -f "$tmp" /usr/bin/amneziawg-go
+  mv -f "$tmp" "$TOOL_BIN_DIR/amneziawg-go"
   # MIT requires the license notice to accompany the binary (same release path).
-  mkdir -p /usr/share/doc/amneziawg-go
-  curl -fsSL "${url%/*}/amneziawg-go-LICENSE" -o /usr/share/doc/amneziawg-go/LICENSE 2>/dev/null \
+  mkdir -p "$DOC_DIR/amneziawg-go"
+  curl -fsSL "${url%/*}/amneziawg-go-LICENSE" -o "$DOC_DIR/amneziawg-go/LICENSE" 2>/dev/null \
     || warn "could not fetch amneziawg-go LICENSE (MIT); see ${REPO_SLUG} release"
   ok "installed prebuilt amneziawg-go"
 }
 
-# Build amneziawg-go from source into /usr/bin.
+# Build amneziawg-go from source into $TOOL_BIN_DIR.
 build_awg_go_from_source() {
   info "building amneziawg-go (userspace backend)"
   install_go
@@ -149,17 +225,17 @@ build_awg_go_from_source() {
   local tmp; tmp="$(mktemp -d)"
   git clone --depth 1 --branch "$AWG_GO_REF" \
     https://github.com/amnezia-vpn/amneziawg-go.git "$tmp/awg-go"
-  ( cd "$tmp/awg-go" && /usr/local/go/bin/go build -o /usr/bin/amneziawg-go . ) \
-    || ( cd "$tmp/awg-go" && go build -o /usr/bin/amneziawg-go . ) \
+  ( cd "$tmp/awg-go" && /usr/local/go/bin/go build -o "$TOOL_BIN_DIR/amneziawg-go" . ) \
+    || ( cd "$tmp/awg-go" && go build -o "$TOOL_BIN_DIR/amneziawg-go" . ) \
     || die "amneziawg-go build failed"
   # Keep the MIT license notice alongside the binary.
-  mkdir -p /usr/share/doc/amneziawg-go
-  cp "$tmp/awg-go/LICENSE" /usr/share/doc/amneziawg-go/LICENSE 2>/dev/null || true
+  mkdir -p "$DOC_DIR/amneziawg-go"
+  cp "$tmp/awg-go/LICENSE" "$DOC_DIR/amneziawg-go/LICENSE" 2>/dev/null || true
   rm -rf "$tmp"
-  ok "amneziawg-go installed (/usr/bin/amneziawg-go)"
+  ok "amneziawg-go installed ($TOOL_BIN_DIR/amneziawg-go)"
 }
 
-# Provide /usr/bin/amneziawg-go: prefer a prebuilt release, fall back to source.
+# Provide $TOOL_BIN_DIR/amneziawg-go: prefer a prebuilt release, fall back to source.
 # NODE_INSTALL_METHOD=source forces a local build.
 install_awg_go() {
   if command -v amneziawg-go >/dev/null 2>&1; then
@@ -175,6 +251,13 @@ install_awg_go() {
 install_awg_module() {
   if modinfo amneziawg >/dev/null 2>&1 || [ -d /sys/module/amneziawg ]; then
     ok "amneziawg kernel module already present"; return
+  fi
+  # Routers ship a closed, headerless kernel: DKMS is not an option there, so
+  # the userspace backend is the only backend.
+  if [ -n "$ENTWARE" ]; then
+    info "no kernel headers on this router — using the userspace backend"
+    install_awg_go
+    return
   fi
 
   # Ask which backend to use. Default follows header availability: kernel module
@@ -234,7 +317,7 @@ install_awg_module() {
 }
 
 # Download prebuilt awg/awg-quick (a tarball) from our GitHub Releases. The
-# tarball ships COPYING (GPL-2) + a source pointer, laid out under /usr/share/doc.
+# tarball ships COPYING (GPL-2) + a source pointer, laid out under $DOC_DIR.
 download_awg_tools_binary() {
   local arch; arch="$(nodeagent_arch)" || { warn "no prebuilt awg-tools for arch $(uname -m)"; return 1; }
   local url
@@ -249,27 +332,31 @@ download_awg_tools_binary() {
       | head -1)"
     [ -n "$url" ] || { warn "no matching amneziawg-tools asset for linux/${arch}"; return 1; }
   fi
-  # awg-quick is a bash script; awg (C) links libmnl at runtime.
+  # awg-quick is a bash script and drives `ip`. awg (C) links libmnl — except
+  # in the MIPS builds, which are static, so Entware needs no libmnl package.
   case "$PKG" in
     apt) pkg_install bash iproute2 libmnl0 ;;
     dnf) pkg_install bash iproute libmnl ;;
+    opkg) pkg_install bash ip-full iptables ;;
   esac
   info "downloading $url"
   local tmp; tmp="$(mktemp -d)"
   if ! curl -fsSL "$url" -o "$tmp/awg-tools.tar.gz" || ! tar -xzf "$tmp/awg-tools.tar.gz" -C "$tmp"; then
     warn "download/extract failed"; rm -rf "$tmp"; return 1
   fi
-  install -m755 "$tmp/awg" /usr/bin/awg
-  install -m755 "$tmp/awg-quick" /usr/bin/awg-quick
-  mkdir -p /usr/share/doc/amneziawg-tools
-  cp "$tmp/COPYING" /usr/share/doc/amneziawg-tools/COPYING 2>/dev/null || true
-  cp "$tmp/README.source" /usr/share/doc/amneziawg-tools/README.source 2>/dev/null || true
+  # cp+chmod rather than install(1): busybox does not always carry that applet.
+  cp "$tmp/awg" "$TOOL_BIN_DIR/awg" && chmod 755 "$TOOL_BIN_DIR/awg"
+  cp "$tmp/awg-quick" "$TOOL_BIN_DIR/awg-quick" && chmod 755 "$TOOL_BIN_DIR/awg-quick"
+  mkdir -p "$DOC_DIR/amneziawg-tools"
+  cp "$tmp/COPYING" "$DOC_DIR/amneziawg-tools/COPYING" 2>/dev/null || true
+  cp "$tmp/README.source" "$DOC_DIR/amneziawg-tools/README.source" 2>/dev/null || true
   rm -rf "$tmp"
   ok "installed prebuilt amneziawg-tools (awg, awg-quick)"
 }
 
 # Build awg/awg-quick from source (GPL-2). Keeps COPYING alongside the binaries.
 build_awg_tools_from_source() {
+  [ -z "$ENTWARE" ] || die "no C toolchain on this router: awg/awg-quick must come from a release build (see NODEAGENT_VERSION)."
   info "building AmneziaWG tools (awg, awg-quick)"
   case "$PKG" in
     apt) pkg_install git build-essential libmnl-dev bash iproute2 ;;
@@ -279,8 +366,8 @@ build_awg_tools_from_source() {
   git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools.git "$tmp/tools"
   make -C "$tmp/tools/src"
   make -C "$tmp/tools/src" install
-  mkdir -p /usr/share/doc/amneziawg-tools
-  cp "$tmp/tools/COPYING" /usr/share/doc/amneziawg-tools/COPYING 2>/dev/null || true
+  mkdir -p "$DOC_DIR/amneziawg-tools"
+  cp "$tmp/tools/COPYING" "$DOC_DIR/amneziawg-tools/COPYING" 2>/dev/null || true
   rm -rf "$tmp"
 }
 
@@ -298,6 +385,12 @@ install_awg_tools() {
 
 enable_forwarding() {
   info "enabling net.ipv4.ip_forward"
+  # On Entware /etc is a tmpfs the firmware rebuilds at boot, so a sysctl.d drop-in
+  # would be lost. Set it live; the init script re-applies it on every start.
+  if [ -n "$ENTWARE" ]; then
+    sysctl -q -w net.ipv4.ip_forward=1 || warn "could not set ip_forward (the router may manage it itself)"
+    return
+  fi
   echo 'net.ipv4.ip_forward=1' >/etc/sysctl.d/99-6ers3rk.conf
   # Also persist in /etc/sysctl.conf: uncomment an existing entry if present,
   # otherwise append one.
@@ -320,7 +413,9 @@ enable_forwarding() {
 # awg-quick PostUp uses; a missing one there aborts interface bring-up.
 ensure_ipip() {
   modprobe ipip 2>/dev/null || true
-  echo 'ipip' >/etc/modules-load.d/6ers3rk-ipip.conf
+  # /etc/modules-load.d is systemd's; on Entware the module either is in the
+  # firmware or cannot be had at all, so there is nothing to persist.
+  [ -n "$ENTWARE" ] || echo 'ipip' >/etc/modules-load.d/6ers3rk-ipip.conf
   if ip link show tunl0 >/dev/null 2>&1 || lsmod 2>/dev/null | grep -q '^ipip'; then
     ok "ipip module available"
   else
@@ -544,11 +639,23 @@ migrate_legacy_panel() {
   ok "migrated $old -> $INSTALL_DIR (project '$proj' pinned; DB volume ${proj}_pgdata reused)"
 }
 
+# Packages a router needs before anything else: awg-quick is a bash script,
+# it drives the full `ip` (busybox's applet has no `route get`), and the agent
+# fetches its config over TLS.
+entware_prereqs() {
+  [ -n "$ENTWARE" ] || return 0
+  info "installing Entware prerequisites"
+  pkg_install bash ip-full iptables curl ca-bundle ca-certificates
+  command -v bash >/dev/null 2>&1 || die "bash is required (opkg install bash) — awg-quick is a bash script."
+  command -v ip >/dev/null 2>&1 || warn "no 'ip' command: awg-quick cannot configure the interface."
+}
+
 # --- node install ----------------------------------------------------------
 # The node self-enrolls: it announces itself to the panel and waits for the admin
 # to approve, then pulls + applies its config automatically (config push over
 # CGNAT via polling). No config is pasted by hand.
 install_node() {
+  entware_prereqs
   install_awg_module
   install_awg_tools
   enable_forwarding
@@ -562,7 +669,7 @@ install_node() {
 
   install_nodeagent "$webpw"
 
-  local ip; ip="$(hostname -I | awk '{print $1}')"
+  local ip; ip="$(host_ip)"
   ok "node agent installed."
   ok "open the node web UI: http://${ip}:8088  (user: admin)"
   info "there, enter the panel's IP and click Connect, then approve the node in the panel."
@@ -580,10 +687,9 @@ update_node() {
   # node quietly keeps falling back to its previous config.
   ensure_ipip
   provision_nodeagent
-  systemctl daemon-reload
-  systemctl restart awg-nodeagent
-  ok "node agent updated + restarted (systemd: awg-nodeagent)"
-  ok "web editor unchanged: http://$(hostname -I | awk '{print $1}'):8088 (user + password preserved)"
+  svc_restart
+  ok "node agent updated + restarted"
+  ok "web editor unchanged: http://$(host_ip):8088 (user + password preserved)"
 }
 
 # Optional local web UI on the node to view/edit awg config from a LAN browser.
@@ -594,11 +700,30 @@ install_go() {
   fi
   local arch; case "$(uname -m)" in
     x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;;
+    # Upstream ships no MIPS toolchain, and a router would be a miserable place
+    # to compile anyway: those hosts must use the prebuilt release binaries.
+    mips*) die "no Go toolchain for $(uname -m); install from a release binary instead (NODE_INSTALL_METHOD=binary)" ;;
     *) die "unsupported arch for Go: $(uname -m)" ;;
   esac
   info "installing Go $GO_VER (distro package too old for this module)"
   curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-${arch}.tar.gz" | tar -C /usr/local -xz
   export PATH="/usr/local/go/bin:$PATH"
+}
+
+# Linux reports plain "mips" in `uname -m` for both endiannesses, so the Go
+# arch (mips vs mipsle) has to come from somewhere else: byte 5 of any local
+# ELF binary is EI_DATA — 1 = little-endian, 2 = big-endian.
+mips_go_arch() {
+  local probe b
+  for probe in /bin/sh /bin/busybox "$0"; do
+    [ -r "$probe" ] || continue
+    b="$(od -An -tu1 -j5 -N1 "$probe" 2>/dev/null | tr -d '[:space:]')"
+    case "$b" in
+      1) echo mipsle; return 0 ;;
+      2) echo mips; return 0 ;;
+    esac
+  done
+  return 1
 }
 
 # Map `uname -m` to the Go arch used in release asset names. Echoes nothing on
@@ -607,11 +732,14 @@ nodeagent_arch() {
   case "$(uname -m)" in
     x86_64) echo amd64 ;;
     aarch64|arm64) echo arm64 ;;
+    # Keenetic/Entware routers: mipsel-3.4 and mips-3.4 targets.
+    mips|mips64) mips_go_arch ;;
+    mipsel|mipsle|mips64el) echo mipsle ;;
     *) return 1 ;;
   esac
 }
 
-# Download a prebuilt nodeagent from GitHub Releases into /usr/local/bin.
+# Download a prebuilt nodeagent from GitHub Releases into $BIN_DIR.
 # Honors NODEAGENT_VERSION (a release tag like v1.1.1); otherwise resolves the
 # latest release via the GitHub API. Returns non-zero so the caller can fall
 # back to a source build.
@@ -635,16 +763,16 @@ download_nodeagent_binary() {
   # own systemd service is running that exact binary, and the kernel refuses to
   # open a currently-executing file for writing (ETXTBSY) — curl would fail
   # with "client returned ERROR on write". rename() has no such restriction.
-  local tmp; tmp="$(mktemp /usr/local/bin/.awg-nodeagent.XXXXXX)"
+  local tmp; tmp="$(mktemp "$BIN_DIR/.awg-nodeagent.XXXXXX")"
   if ! curl -fsSL "$url" -o "$tmp"; then
     warn "download failed"; rm -f "$tmp"; return 1
   fi
   chmod +x "$tmp"
-  mv -f "$tmp" /usr/local/bin/awg-nodeagent
+  mv -f "$tmp" "$BIN_DIR/awg-nodeagent"
   ok "installed prebuilt node agent"
 }
 
-# Install Go, fetch sources, and compile the nodeagent into /usr/local/bin.
+# Install Go, fetch sources, and compile the nodeagent into $BIN_DIR.
 build_nodeagent_from_source() {
   install_go
   case "$PKG" in apt) pkg_install git ;; dnf) pkg_install git ;; esac
@@ -654,12 +782,12 @@ build_nodeagent_from_source() {
     git clone "$REPO_URL" "$INSTALL_DIR"
   fi
   info "building node agent"
-  ( cd "$INSTALL_DIR" && /usr/local/go/bin/go build -o /usr/local/bin/awg-nodeagent ./cmd/nodeagent ) \
-    || ( cd "$INSTALL_DIR" && go build -o /usr/local/bin/awg-nodeagent ./cmd/nodeagent ) \
+  ( cd "$INSTALL_DIR" && /usr/local/go/bin/go build -o "$BIN_DIR/awg-nodeagent" ./cmd/nodeagent ) \
+    || ( cd "$INSTALL_DIR" && go build -o "$BIN_DIR/awg-nodeagent" ./cmd/nodeagent ) \
     || die "node agent build failed"
 }
 
-# Provision /usr/local/bin/awg-nodeagent either from a GitHub release binary or
+# Provision $BIN_DIR/awg-nodeagent either from a GitHub release binary or
 # by compiling from source. NODE_INSTALL_METHOD=binary|source skips the prompt.
 provision_nodeagent() {
   local method="${NODE_INSTALL_METHOD:-}"
@@ -682,35 +810,16 @@ provision_nodeagent() {
   build_nodeagent_from_source
 }
 
-# install_nodeagent <web_password>
-# Installs the agent as a systemd service. The node's panel is set later via the
-# web UI (enter panel IP -> Connect); LAN subnet + iface are auto-detected.
-install_nodeagent() {
-  local webpw="$1"
-
-  provision_nodeagent
-
-  umask 077
-  cat >/etc/awg-nodeagent.env <<EOF
-STATE_FILE=/var/lib/awg-nodeagent/state.json
-AWG_IFACE=$AWG_IFACE
-AWG_CONF=$AWG_CONF_DIR/$AWG_IFACE.conf
-NODE_PASSWORD=$webpw
-NODE_LISTEN=:8088
-EOF
-  # No kernel module: force awg-quick down the userspace amneziawg-go path.
-  if [ -n "$AWG_USERSPACE" ]; then
-    echo "WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go" >>/etc/awg-nodeagent.env
-  fi
-  cat >/etc/systemd/system/awg-nodeagent.service <<'EOF'
+write_systemd_unit() {
+  cat >/etc/systemd/system/awg-nodeagent.service <<EOF
 [Unit]
 Description=6ers3rk node agent (enroll + config push + web editor)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-EnvironmentFile=/etc/awg-nodeagent.env
-ExecStart=/usr/local/bin/awg-nodeagent
+EnvironmentFile=$ENV_FILE
+ExecStart=$BIN_DIR/awg-nodeagent
 Restart=on-failure
 RestartSec=5
 User=root
@@ -718,9 +827,115 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload
-  systemctl enable --now awg-nodeagent
-  ok "node agent running (systemd: awg-nodeagent)"
+}
+
+# Entware's boot runner (/opt/etc/init.d/rc.unslung) invokes every S* script
+# with "start", so the S99 prefix is what enables the agent at boot. The script
+# is plain POSIX sh — a router has no bash unless one was installed — and keeps
+# the agent under a small supervisor loop, standing in for systemd's
+# Restart=on-failure.
+write_init_script() {
+  mkdir -p "$(dirname "$INIT_SCRIPT")"
+  cat >"$INIT_SCRIPT" <<EOF
+#!/bin/sh
+# 6ers3rk node agent (enroll + config push + web editor).
+ENV_FILE=$ENV_FILE
+BIN=$BIN_DIR/awg-nodeagent
+STATEDIR=$(dirname "$STATE_FILE")
+EOF
+  cat >>"$INIT_SCRIPT" <<'EOF'
+RUNDIR=/opt/var/run
+PIDFILE=$RUNDIR/awg-nodeagent.pid
+CHILDPID=$RUNDIR/awg-nodeagent.child
+LOG=/opt/var/log/awg-nodeagent.log
+PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+start() {
+  running && { echo "awg-nodeagent already running"; return 0; }
+  mkdir -p "$RUNDIR" /opt/var/log "$STATEDIR" 2>/dev/null
+  # The router reboots into a fresh /proc state; forwarding is what makes this
+  # box a router for the tunnel, so re-assert it on every start.
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+  set -a
+  . "$ENV_FILE"
+  set +a
+  # Supervisor loop: restart the agent if it dies, mirroring systemd's
+  # Restart=on-failure/RestartSec=5. The agent's own pid is recorded on every
+  # iteration — killing the supervisor alone would leave the agent orphaned but
+  # running, still holding :8088 and the tunnel.
+  ( while :; do
+      "$BIN" >>"$LOG" 2>&1 &
+      echo $! >"$CHILDPID"
+      wait $!
+      sleep 5
+    done ) &
+  echo $! >"$PIDFILE"
+  echo "awg-nodeagent started"
+}
+
+stop() {
+  # Supervisor first, or it respawns the agent the moment we kill it.
+  if running; then kill "$(cat "$PIDFILE")" 2>/dev/null; fi
+  rm -f "$PIDFILE"
+  if [ -f "$CHILDPID" ]; then
+    kill "$(cat "$CHILDPID")" 2>/dev/null
+    sleep 1
+    kill -9 "$(cat "$CHILDPID")" 2>/dev/null
+    rm -f "$CHILDPID"
+  fi
+  # Belt and braces for an agent started outside this script.
+  pids="$(pidof awg-nodeagent 2>/dev/null)"
+  [ -n "$pids" ] && kill $pids 2>/dev/null
+  echo "awg-nodeagent stopped"
+  return 0
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  check|status) running && echo "running" || { echo "stopped"; exit 1; } ;;
+  *) echo "usage: $0 {start|stop|restart|check}"; exit 1 ;;
+esac
+EOF
+  chmod 755 "$INIT_SCRIPT"
+}
+
+# install_nodeagent <web_password>
+# Installs the agent as a service (systemd, or an Entware init script on
+# routers). The node's panel is set later via the web UI (enter panel IP ->
+# Connect); LAN subnet + iface are auto-detected.
+install_nodeagent() {
+  local webpw="$1"
+
+  provision_nodeagent
+
+  umask 077
+  mkdir -p "$(dirname "$ENV_FILE")" "$(dirname "$STATE_FILE")"
+  # The password is single-quoted: the Entware init script sources this file
+  # with `.`, so an unquoted space or $ in it would be word-split or expanded.
+  # systemd's EnvironmentFile understands the same quoting.
+  cat >"$ENV_FILE" <<EOF
+STATE_FILE=$STATE_FILE
+AWG_IFACE=$AWG_IFACE
+AWG_CONF=$AWG_CONF_DIR/$AWG_IFACE.conf
+NODE_PASSWORD=$(shell_quote "$webpw")
+NODE_LISTEN=:8088
+EOF
+  # No kernel module: force awg-quick down the userspace amneziawg-go path.
+  if [ -n "$AWG_USERSPACE" ]; then
+    echo "WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go" >>"$ENV_FILE"
+  fi
+  svc_install
+  svc_enable_start
+  if [ -n "$ENTWARE" ]; then
+    ok "node agent running (init script: $INIT_SCRIPT, log: /opt/var/log/awg-nodeagent.log)"
+  else
+    ok "node agent running (systemd: awg-nodeagent)"
+  fi
   [ -n "$webpw" ] && ok "node web editor: http://<node-lan-ip>:8088 (user: admin)"
   [ -n "$webpw" ] && warn "web editor runs awg-quick as root — keep it LAN-only"
 }
