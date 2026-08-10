@@ -269,13 +269,21 @@ jobs:
             ${{ env.ARTIFACT }}
             amneziawg-go-LICENSE
 
-      - name: Attach to release
+      - name: Attach binary to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            ${{ env.ARTIFACT }}
-            amneziawg-go-LICENSE
+          files: ${{ env.ARTIFACT }}
+
+      # The LICENSE is identical for every arch, so exactly ONE job may upload
+      # it. Uploading the same asset name from several matrix jobs at once is a
+      # race: the action replaces an existing asset by deleting it first, and
+      # the loser then gets "Not Found" updating an asset that no longer exists.
+      - name: Attach license to release (once)
+        if: github.event_name == 'release' && matrix.goarch == 'amd64'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: amneziawg-go-LICENSE
 
   # ---- client: build the control-plane tools (awg, awg-quick) for the node ----
   # GPL-2.0, so the license text and the complete corresponding source are
