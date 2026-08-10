@@ -17,7 +17,24 @@ set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/6ers3rk}"
 AWG_IFACE="${AWG_IFACE:-awg0}"
-AWG_CONF_DIR="/etc/amnezia/amneziawg"
+
+# Layout mirror of install.sh: Entware routers (Keenetic) keep everything under
+# /opt and have no systemd — their service is an /opt/etc/init.d/S* script.
+if command -v opkg >/dev/null 2>&1; then
+  ENTWARE=1
+  BIN_DIR=/opt/bin; TOOL_BIN_DIR=/opt/bin; DOC_DIR=/opt/share/doc
+  ENV_FILE=/opt/etc/awg-nodeagent.env
+  STATE_DIR=/opt/var/lib/awg-nodeagent
+  AWG_CONF_DIR="/opt/etc/amnezia/amneziawg"
+  INIT_SCRIPT=/opt/etc/init.d/S99awg-nodeagent
+else
+  ENTWARE=""
+  BIN_DIR=/usr/local/bin; TOOL_BIN_DIR=/usr/bin; DOC_DIR=/usr/share/doc
+  ENV_FILE=/etc/awg-nodeagent.env
+  STATE_DIR=/var/lib/awg-nodeagent
+  AWG_CONF_DIR="/etc/amnezia/amneziawg"
+  INIT_SCRIPT=""
+fi
 
 c() { printf '\033[%sm%s\033[0m' "$1" "$2"; }
 info() { echo "$(c '1;34' '::') $*"; }
@@ -80,12 +97,25 @@ remove_awg_module() {
   [ -n "$ver" ] && dkms remove "amneziawg/$ver" --all 2>/dev/null || true
   rm -rf /usr/src/amneziawg-* 2>/dev/null || true
   # userspace backend (installed as a fallback when the module can't be built)
-  rm -f /usr/bin/amneziawg-go
-  rm -rf /usr/share/doc/amneziawg-go
+  rm -f "$TOOL_BIN_DIR/amneziawg-go"
+  rm -rf "$DOC_DIR/amneziawg-go"
 }
 
 remove_sysctl() {
   rm -f /etc/sysctl.d/99-6ers3rk.conf
+}
+
+# Stop and forget the node agent service, whichever init system runs it.
+remove_node_service() {
+  if [ -n "$ENTWARE" ]; then
+    [ -x "$INIT_SCRIPT" ] && "$INIT_SCRIPT" stop >/dev/null 2>&1
+    rm -f "$INIT_SCRIPT" /opt/var/run/awg-nodeagent.pid /opt/var/run/awg-nodeagent.child
+    return 0
+  fi
+  systemctl disable --now awg-nodeagent 2>/dev/null || true
+  rm -f /etc/systemd/system/awg-nodeagent.service
+  systemctl disable --now "awg-quick@$AWG_IFACE" 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
 }
 
 # --- panel removal ---------------------------------------------------------
@@ -118,11 +148,8 @@ remove_panel() {
 # --- node removal ----------------------------------------------------------
 remove_node() {
   info "stopping node agent"
-  systemctl disable --now awg-nodeagent 2>/dev/null || true
-  rm -f /etc/systemd/system/awg-nodeagent.service /etc/awg-nodeagent.env
-  rm -f /usr/local/bin/awg-nodeagent
-  systemctl disable --now "awg-quick@$AWG_IFACE" 2>/dev/null || true
-  systemctl daemon-reload 2>/dev/null || true
+  remove_node_service
+  rm -f "$ENV_FILE" "$BIN_DIR/awg-nodeagent"
 
   teardown_awg_iface
   rm -f "$AWG_CONF_DIR/$AWG_IFACE.conf" "$AWG_CONF_DIR/$AWG_IFACE.conf.bak"
@@ -130,15 +157,15 @@ remove_node() {
 
   if [ -n "$PURGE_DATA" ]; then
     info "removing node state"
-    rm -rf /var/lib/awg-nodeagent
+    rm -rf "$STATE_DIR"
   else
-    info "keeping /var/lib/awg-nodeagent (set PURGE_DATA=1 to delete keypair+enrollment)"
+    info "keeping $STATE_DIR (set PURGE_DATA=1 to delete keypair+enrollment)"
   fi
 
   if [ -n "$PURGE_AWG" ]; then
     remove_awg_module
-    rm -f /usr/bin/awg /usr/bin/awg-quick
-    rm -rf /usr/share/doc/amneziawg-tools
+    rm -f "$TOOL_BIN_DIR/awg" "$TOOL_BIN_DIR/awg-quick"
+    rm -rf "$DOC_DIR/amneziawg-tools"
   else
     info "keeping AmneziaWG module + tools (set PURGE_AWG=1 to remove)"
   fi
@@ -150,4 +177,4 @@ case "$MODE" in
   node)  remove_node ;;
 esac
 
-warn "Docker itself was left installed. Remove it manually if nothing else uses it."
+[ -n "$ENTWARE" ] || warn "Docker itself was left installed. Remove it manually if nothing else uses it."

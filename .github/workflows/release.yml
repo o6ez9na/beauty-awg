@@ -165,6 +165,16 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
+          # Keenetic routers (Entware): aarch64-3.10 is covered by linux/arm64
+          # above; the two MIPS families need their own builds. Their SoCs
+          # (MT7621 1004Kc, ...) have no usable FPU, so softfloat is mandatory —
+          # a hardfloat binary dies with SIGILL on the first float op.
+          - goos: linux
+            goarch: mipsle # mipsel-3.4 Entware target (little-endian)
+            gomips: softfloat
+          - goos: linux
+            goarch: mips # mips-3.4 Entware target (big-endian)
+            gomips: softfloat
           - goos: windows
             goarch: amd64
           - goos: windows
@@ -181,6 +191,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
           CGO_ENABLED: '0'
         run: |
           version="${{ github.event_name == 'release' && github.ref_name || inputs.version }}"
@@ -210,7 +221,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        goarch: [amd64, arm64]
+        # mipsle/mips are the Keenetic (Entware) targets: those routers can't
+        # build the kernel module, so userspace is the ONLY backend there.
+        include:
+          - goarch: amd64
+          - goarch: arm64
+          - goarch: mipsle
+            gomips: softfloat
+          - goarch: mips
+            gomips: softfloat
     env:
       # AmneziaWG userspace impl ref to build from (bump to pin a release).
       AWG_GO_REF: master
@@ -232,6 +251,7 @@ jobs:
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
           CGO_ENABLED: '0'
         run: |
           version="${{ github.event_name == 'release' && github.ref_name || inputs.version }}"
@@ -347,3 +367,102 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: ${{ env.SRC_ARTIFACT }}
+
+  # ---- client: the same tools for Keenetic/Entware routers (MIPS) ----
+  # No GitHub-hosted MIPS runner exists, so these are cross-compiled with the
+  # Debian cross toolchains. libmnl isn't packaged for those triplets either, so
+  # it is built from source into a private sysroot and linked in statically —
+  # which also makes awg independent of the router's libc (musl/uclibc).
+  # Unlike the Go builds these stay hardfloat: the MIPS kernel emulates FP for
+  # cores without an FPU, and Debian ships no soft-float MIPS libc to link.
+  awg-tools-mips:
+    needs: [security, tests]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `arch` matches the Go arch names used for every other asset, so the
+          # installer's single nodeagent_arch mapping covers all of them.
+          - arch: mipsle
+            triplet: mipsel-linux-gnu
+          - arch: mips
+            triplet: mips-linux-gnu
+    env:
+      AWG_TOOLS_REF: master
+      LIBMNL_VER: 1.0.5
+    steps:
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git build-essential pkg-config \
+            "gcc-${{ matrix.triplet }}" "libc6-dev-${{ matrix.arch == 'mipsle' && 'mipsel' || 'mips' }}-cross"
+
+      - name: Build libmnl for ${{ matrix.triplet }}
+        run: |
+          curl -fsSL "https://www.netfilter.org/projects/libmnl/files/libmnl-${LIBMNL_VER}.tar.bz2" \
+            | tar -xj
+          cd "libmnl-${LIBMNL_VER}"
+          ./configure --host=${{ matrix.triplet }} --prefix="$GITHUB_WORKSPACE/sysroot" \
+            --enable-static --disable-shared
+          make -j"$(nproc)"
+          make install
+
+      - name: Checkout amneziawg-tools
+        uses: actions/checkout@v7
+        with:
+          repository: amnezia-vpn/amneziawg-tools
+          ref: ${{ env.AWG_TOOLS_REF }}
+          path: awg-tools
+
+      - name: Cross-build and package
+        env:
+          CC: ${{ matrix.triplet }}-gcc
+          # wireguard-tools' Makefile finds libmnl via pkg-config; point it at
+          # the cross sysroot only, so it can't pick up the host's x86 copy.
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/sysroot/lib/pkgconfig
+          PKG_CONFIG_SYSROOT_DIR: ${{ github.workspace }}/sysroot
+        run: |
+          version="${{ github.event_name == 'release' && github.ref_name || inputs.version }}"
+          arch="${{ matrix.arch }}"
+          make -C awg-tools/src -j"$(nproc)" LDFLAGS=-static
+          make -C awg-tools/src install DESTDIR="$PWD/stage" PREFIX=/usr LDFLAGS=-static
+          file stage/usr/bin/awg
+          # Guard against a silent host build: a wrong-arch binary would install
+          # fine on the router and then fail with "cannot execute binary file".
+          file stage/usr/bin/awg | grep -q MIPS || { echo "not a MIPS binary"; exit 1; }
+
+          mkdir -p dist
+          cp stage/usr/bin/awg stage/usr/bin/awg-quick dist/
+          cp awg-tools/COPYING dist/COPYING
+          cat > dist/README.source <<EOF
+          awg and awg-quick are built from amneziawg-tools, licensed under the
+          GNU General Public License, version 2 (see COPYING).
+
+          The complete corresponding source for this exact build is available
+          from the same GitHub release:
+            amneziawg-tools-${version}-source.tar.gz
+          and upstream:
+            https://github.com/amnezia-vpn/amneziawg-tools
+
+          Written offer: for three years from the date you received these
+          binaries you may obtain the corresponding source by either means
+          above at no charge.
+          EOF
+
+          out="amneziawg-tools-${version}-linux-${arch}.tar.gz"
+          tar -czf "$out" -C dist .
+          echo "ARTIFACT=$out" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: amneziawg-tools-linux-${{ matrix.arch }}
+          path: ${{ env.ARTIFACT }}
+
+      - name: Attach binaries to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ env.ARTIFACT }}
