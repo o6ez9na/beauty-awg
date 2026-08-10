@@ -714,19 +714,21 @@ install_go() {
 # arch (mips vs mipsle) has to come from somewhere else: byte 5 of any local
 # ELF binary is EI_DATA — 1 = little-endian, 2 = big-endian.
 #
-# The byte is extracted with dd (skip 5, read 1) and octal-dumped with `od -b`
-# — plain octal is the one od mode BusyBox always ships. The earlier `od -j5
-# -N1 -tu1` combo relies on GNU-only flags that BusyBox od silently ignores,
-# which is why the probe came back empty on Entware and mips detection failed.
+# The byte is read with dd (skip 5, read 1) and compared against literal \1/\2
+# built by printf. No `od`/`hexdump`: Entware's BusyBox is often built without
+# the od applet, so the earlier od-based probe returned empty and mips detection
+# failed. dd and printf are always present. Command substitution preserves the
+# non-newline control byte, so the case match is exact.
 # Set NODEAGENT_ARCH (mips|mipsle|...) to bypass the probe entirely.
 mips_go_arch() {
-  local probe b
+  local probe b5 le be
+  le="$(printf '\1')"; be="$(printf '\2')"
   for probe in /bin/sh /bin/busybox "$0"; do
     [ -r "$probe" ] || continue
-    b="$(dd if="$probe" bs=1 skip=5 count=1 2>/dev/null | od -An -b 2>/dev/null | tr -dc '0-9')"
-    case "$b" in
-      *1) echo mipsle; return 0 ;;
-      *2) echo mips; return 0 ;;
+    b5="$(dd if="$probe" bs=1 skip=5 count=1 2>/dev/null)"
+    case "$b5" in
+      "$le") echo mipsle; return 0 ;;
+      "$be") echo mips; return 0 ;;
     esac
   done
   return 1
