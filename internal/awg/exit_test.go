@@ -76,17 +76,19 @@ func TestRenderNode_IPIPExitReturnPath(t *testing.T) {
 		// The address is load-bearing, not cosmetic: the kernel's loose rp_filter
 		// branch is unreachable on an addressless device, so without it the
 		// decapsulated pool source is rejected whatever rp_filter says.
-		"PostUp = ip addr replace 10.8.0.3/32 dev ipip-hub",
-		"PostUp = ip link set ipip-hub up",
-		"PostUp = sysctl -w net.ipv4.conf.ipip-hub.rp_filter=2",
-		"PostUp = iptables -I FORWARD -i ipip-hub -j ACCEPT",
-		"PostUp = iptables -I FORWARD -o ipip-hub -j ACCEPT",
-		"PostUp = iptables -t mangle -A PREROUTING -i ipip-hub -j CONNMARK --set-mark 0x33",
-		"PostUp = iptables -t mangle -A PREROUTING ! -i ipip-hub -j CONNMARK --restore-mark",
-		// Every line must tolerate its own leftovers: awg-quick aborts bring-up on
-		// the first PostUp failure, and an interrupted down leaves these behind.
+		"PostUp = ip addr replace 10.8.0.3/32 dev ipip-hub || true",
+		"PostUp = ip link set ipip-hub up || true",
+		"PostUp = sysctl -w net.ipv4.conf.ipip-hub.rp_filter=2 || true",
+		"PostUp = iptables -I FORWARD -i ipip-hub -j ACCEPT || true",
+		"PostUp = iptables -I FORWARD -o ipip-hub -j ACCEPT || true",
+		"PostUp = iptables -t mangle -A PREROUTING -i ipip-hub -j CONNMARK --set-mark 0x33 || true",
+		"PostUp = iptables -t mangle -A PREROUTING ! -i ipip-hub -j CONNMARK --restore-mark || true",
+		// Every line must tolerate its own leftovers AND a host that cannot do IPIP
+		// at all: awg-quick aborts bring-up on the first PostUp failure and its ERR
+		// trap deletes the interface, so one unavailable optional feature would cost
+		// the node its whole tunnel (routers ship no ipip module).
 		"PostUp = ip rule add fwmark 0x33 lookup 133 pref 1330 || true",
-		"PostUp = ip route replace default dev ipip-hub table 133",
+		"PostUp = ip route replace default dev ipip-hub table 133 || true",
 		"PostDown = ip route flush table 133 || true",
 		"PostDown = ip rule del fwmark 0x33 lookup 133 pref 1330 || true",
 		"PostDown = ip link del ipip-hub || true",

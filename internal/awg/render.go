@@ -131,6 +131,16 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	}
 	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %%i ! -o %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD ! -i %%i -o %%i -j ACCEPT\n")
+	// Traffic addressed to the node ITSELF (its tunnel /32): the hub's health
+	// pings, and the node's own web editor on :8088. On a plain server the INPUT
+	// policy is ACCEPT, so this rule changes nothing. On a router it is the
+	// difference between a working node and a silent one: Keenetic's ndm installs
+	// its own INPUT chain that drops everything arriving on an interface it does
+	// not manage, so the tunnel handshakes and keepalives flow (those are OUTPUT
+	// plus the WAN's UDP socket) while every packet sent INTO the node over awg0 is
+	// dropped — the node looks up in `awg show` but answers nothing.
+	fmt.Fprintf(&b, "PostUp = iptables -I INPUT -i %%i -j ACCEPT\n")
+	fmt.Fprintf(&b, "PostDown = iptables -D INPUT -i %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n", hub.PoolCIDR.String())
 	for _, s := range reachSubnets {
 		fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", s.String(), n.LANIface)
@@ -167,14 +177,22 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	// max, so it wins the kernel's max(conf.all, conf.<dev>) whatever the host's
 	// global setting is, without loosening the rest of the machine.
 	fmt.Fprintf(&b, "PostUp = ip link add %s type ipip local %s remote %s || true\n", nodeExitDev, n.Address.String(), hub.Address.String())
-	fmt.Fprintf(&b, "PostUp = ip addr replace %s/32 dev %s\n", n.Address.String(), nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = ip link set %s up\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.conf.%s.rp_filter=2\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %s -j ACCEPT\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -o %s -j ACCEPT\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A PREROUTING -i %s -j CONNMARK --set-mark %s\n", nodeExitDev, nodeExitMark)
-	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A PREROUTING ! -i %s -j CONNMARK --restore-mark\n", nodeExitDev)
-	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n", nodeExitDev)
+	//
+	// Every line below is tolerated (`|| true`). Internet-exit is an OPTIONAL
+	// feature, but awg-quick aborts the whole bring-up — and its ERR trap then
+	// tears the interface back down — on the first PostUp that fails. A router
+	// whose firmware ships no ipip module (or no CONNMARK/TCPMSS mangle targets)
+	// would therefore never get a tunnel at all, losing plain LAN access over a
+	// feature it cannot use anyway. Degrading to "no internet-exit" is the right
+	// failure mode.
+	fmt.Fprintf(&b, "PostUp = ip addr replace %s/32 dev %s || true\n", n.Address.String(), nodeExitDev)
+	fmt.Fprintf(&b, "PostUp = ip link set %s up || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostUp = sysctl -w net.ipv4.conf.%s.rp_filter=2 || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -i %s -j ACCEPT || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostUp = iptables -I FORWARD -o %s -j ACCEPT || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A PREROUTING -i %s -j CONNMARK --set-mark %s || true\n", nodeExitDev, nodeExitMark)
+	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A PREROUTING ! -i %s -j CONNMARK --restore-mark || true\n", nodeExitDev)
+	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A FORWARD -o %s -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu || true\n", nodeExitDev)
 	// awg-quick aborts the whole bring-up on the first PostUp line that fails, so
 	// every line here has to survive finding its own leftovers: a `down` that was
 	// interrupted (or a reboot mid-teardown) leaves the rule and the route behind,
@@ -182,7 +200,7 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	// takes the interface down with it. `replace` is idempotent; the rule add is
 	// tolerated because a duplicate means the rule we want is already there.
 	fmt.Fprintf(&b, "PostUp = ip rule add fwmark %s lookup %s pref %s || true\n", nodeExitMark, nodeExitTable, nodeExitPref)
-	fmt.Fprintf(&b, "PostUp = ip route replace default dev %s table %s\n", nodeExitDev, nodeExitTable)
+	fmt.Fprintf(&b, "PostUp = ip route replace default dev %s table %s || true\n", nodeExitDev, nodeExitTable)
 	// Teardown is best-effort for the same reason, in reverse: a half-removed
 	// block must not stop the rest from being cleaned up, or the next `up` starts
 	// from an even messier state. `ip link del` last takes the address with it.

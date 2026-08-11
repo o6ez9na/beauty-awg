@@ -73,6 +73,29 @@ func TestRenderNode_ReachSubnets(t *testing.T) {
 	}
 }
 
+// Traffic addressed to the node itself must be let in explicitly. A router
+// (Keenetic/ndm) drops INPUT arriving on an interface it doesn't manage, which
+// leaves the tunnel handshaking while the node answers nothing at all — not the
+// hub's pings, not its own web editor.
+func TestRenderNode_AcceptsInputOnTunnel(t *testing.T) {
+	hub := testHub(t)
+	n := Node{
+		Name:     "router",
+		Address:  netip.MustParseAddr("10.8.0.6"),
+		Subnets:  []netip.Prefix{mustPrefix(t, "192.168.3.0/24")},
+		LANIface: "br0",
+		Keys:     Keypair{Private: "RPRIV", Public: "RPUB"},
+	}
+	got := RenderNode(hub, n, nil)
+
+	if !strings.Contains(got, "PostUp = iptables -I INPUT -i %i -j ACCEPT") {
+		t.Errorf("missing INPUT accept for the tunnel:\n%s", got)
+	}
+	if !strings.Contains(got, "PostDown = iptables -D INPUT -i %i -j ACCEPT") {
+		t.Errorf("missing INPUT accept teardown:\n%s", got)
+	}
+}
+
 // With no links the config is unchanged: AllowedIPs is just the pool.
 func TestRenderNode_NoLinks(t *testing.T) {
 	hub := testHub(t)
