@@ -722,6 +722,9 @@ update_node() {
   # node quietly keeps falling back to its previous config.
   ensure_ipip
   provision_nodeagent
+  # The hook is generated code, not config: it changes with the installer, so an
+  # update has to refresh it or a node keeps replaying rules with the old logic.
+  write_ndm_netfilter_hook
   svc_restart
   ok "node agent updated + restarted"
   ok "web editor unchanged: http://$(host_ip):8088 (user + password preserved)"
@@ -1001,11 +1004,32 @@ EOF
 # Nothing to restore if the interface itself is down (agent not up yet).
 ip link show "$IFACE" >/dev/null 2>&1 || exit 0
 export PATH=/opt/bin:/opt/sbin:/usr/sbin:/usr/bin:/sbin:/bin
-# Re-run each PostUp line. These append (`-A`); ndm has just flushed, so this
-# restores rather than duplicates. Failures are ignored — a partial restore
-# still beats none.
+# Re-run each PostUp line. Failures are ignored — a partial restore still beats
+# none.
 sed -n 's/^PostUp *= *//p' "$CONF" | while IFS= read -r cmd; do
-  [ -n "$cmd" ] && eval "$cmd" >/dev/null 2>&1
+  [ -n "$cmd" ] || continue
+  # %i is awg-quick's placeholder for the interface, expanded by awg-quick and
+  # NOT by us. Left literal it produces rules matching an interface named "%i",
+  # which never exists — so `! -o %i` is always true and the pool masquerade
+  # applies even to traffic heading back into the tunnel.
+  cmd=$(printf '%s' "$cmd" | sed "s/%i/$IFACE/g")
+  # ndm does not always flush everything we own, and awg-quick's own PostUp may
+  # have run moments earlier, so a blind -I/-A accumulates one duplicate per
+  # rebuild (a WAN flap every few minutes leaves hundreds). Ask iptables whether
+  # the rule is already there and skip it if so. Only the first -I/-A is
+  # rewritten: that is the rule's own verb, any later one belongs to a chained
+  # command we must not touch. The trailing `|| true` most lines carry has to go
+  # first, or the probe would succeed unconditionally and we would never add
+  # anything.
+  case "$cmd" in
+    iptables\ *|ip6tables\ *)
+      chk=$(printf '%s' "$cmd" | sed 's/ *||.*$//; s/ -[IA] / -C /')
+      if [ "$chk" != "$cmd" ] && eval "$chk" >/dev/null 2>&1; then
+        continue
+      fi
+      ;;
+  esac
+  eval "$cmd" >/dev/null 2>&1
 done
 exit 0
 EOF
