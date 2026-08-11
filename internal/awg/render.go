@@ -141,6 +141,18 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	// dropped — the node looks up in `awg show` but answers nothing.
 	fmt.Fprintf(&b, "PostUp = iptables -I INPUT -i %%i -j ACCEPT\n")
 	fmt.Fprintf(&b, "PostDown = iptables -D INPUT -i %%i -j ACCEPT\n")
+	// Clamp the MSS of everything this node sends INTO the tunnel, both forwarded
+	// (LAN host -> client) and locally generated (the node's own web editor). The
+	// hub already clamps to 1280 in its forward chain, which covers client-sourced
+	// flows; nothing clamps the node's own direction. That gap only shows up where
+	// the node's uplink carries less than the tunnel's 1420 — a PPPoE router, where
+	// 1420 + 80 bytes of overhead exceeds the 1492 link MTU. The handshake and small
+	// replies pass, full-size segments are dropped with DF set and PMTUD is
+	// black-holed, so TCP connects and then hangs with zero bytes.
+	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A FORWARD -o %%i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 || true\n")
+	fmt.Fprintf(&b, "PostUp = iptables -t mangle -A OUTPUT -o %%i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 || true\n")
+	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D FORWARD -o %%i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 || true\n")
+	fmt.Fprintf(&b, "PostDown = iptables -t mangle -D OUTPUT -o %%i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 || true\n")
 	fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n", hub.PoolCIDR.String())
 	for _, s := range reachSubnets {
 		fmt.Fprintf(&b, "PostDown = iptables -t nat -D POSTROUTING -s %s -o %s -j MASQUERADE\n", s.String(), n.LANIface)

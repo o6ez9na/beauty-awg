@@ -94,6 +94,15 @@ func TestRenderNode_AcceptsInputOnTunnel(t *testing.T) {
 	if !strings.Contains(got, "PostDown = iptables -D INPUT -i %i -j ACCEPT") {
 		t.Errorf("missing INPUT accept teardown:\n%s", got)
 	}
+	// Both directions this node originates into the tunnel are clamped: forwarded
+	// LAN replies and the node's own sockets. Without it a router whose uplink is
+	// narrower than 1420 (PPPoE) connects and then hangs.
+	for _, chain := range []string{"FORWARD", "OUTPUT"} {
+		want := "PostUp = iptables -t mangle -A " + chain + " -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280 || true"
+		if !strings.Contains(got, want) {
+			t.Errorf("missing MSS clamp %q:\n%s", want, got)
+		}
+	}
 }
 
 // With no links the config is unchanged: AllowedIPs is just the pool.
