@@ -105,6 +105,38 @@ func TestRenderNode_AcceptsInputOnTunnel(t *testing.T) {
 	}
 }
 
+// The XKeen hand-off is guarded on the node, added idempotently, and paired
+// with the OUTPUT re-mark that keeps proxied replies on the IPIP return path.
+func TestRenderNode_XkeenHandoff(t *testing.T) {
+	hub := testHub(t)
+	n := Node{
+		Name: "router", Address: netip.MustParseAddr("10.8.0.6"),
+		Subnets:  []netip.Prefix{mustPrefix(t, "192.168.3.0/24")},
+		LANIface: "br0", Keys: Keypair{Private: "RPRIV", Public: "RPUB"},
+	}
+	got := RenderNode(hub, n, nil)
+
+	for _, want := range []string{
+		// Guarded: a node without XKeen must render these as no-ops.
+		"PostUp = [ -x /opt/etc/init.d/S05xkeen ] && { iptables -t mangle -C PREROUTING -i ipip-hub -j DSCP --set-dscp 0x3f 2>/dev/null || iptables -t mangle -I PREROUTING -i ipip-hub -j DSCP --set-dscp 0x3f; } || true",
+		// Without this, a proxied reply is generated locally, misses the connmark
+		// restore in PREROUTING, and leaves via the tunnel with a foreign source —
+		// which the hub drops.
+		"PostUp = [ -x /opt/etc/init.d/S05xkeen ] && { iptables -t mangle -C OUTPUT -m connmark --mark 0x33 -j MARK --set-mark 0x33 2>/dev/null || iptables -t mangle -A OUTPUT -m connmark --mark 0x33 -j MARK --set-mark 0x33; } || true",
+		"PostDown = iptables -t mangle -D PREROUTING -i ipip-hub -j DSCP --set-dscp 0x3f || true",
+		"PostDown = iptables -t mangle -D OUTPUT -m connmark --mark 0x33 -j MARK --set-mark 0x33 || true",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing XKeen line %q:\n%s", want, got)
+		}
+	}
+	// The OUTPUT mark must stay scoped to our own connections: unscoped it would
+	// stamp firmware traffic and hijack the router's own policy routing.
+	if strings.Contains(got, "-A OUTPUT -j MARK --set-mark") {
+		t.Errorf("OUTPUT mark must match connmark 0x33:\n%s", got)
+	}
+}
+
 // With no links the config is unchanged: AllowedIPs is just the pool.
 func TestRenderNode_NoLinks(t *testing.T) {
 	hub := testHub(t)

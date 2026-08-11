@@ -79,6 +79,11 @@ const (
 	nodeExitPref  = "1330"
 )
 
+// XKeen's own `dscp_proxy` default: the DSCP value it treats as "send this
+// through the proxy". Changing it in XKeen's config is possible but rare, and a
+// node that did so would simply not be intercepted — never misrouted.
+const nodeXkeenDSCP = "0x3f"
+
 // RenderNode builds the static awg config installed once on a home server.
 // It NATs (masquerades) the client pool into the LAN so LAN hosts need no route
 // back. AllowedIPs for the hub peer = whole pool, so all client traffic returns.
@@ -224,6 +229,45 @@ func RenderNode(hub Hub, n Node, reachSubnets []netip.Prefix) string {
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -i %s -j ACCEPT || true\n", nodeExitDev)
 	fmt.Fprintf(&b, "PostDown = iptables -D FORWARD -o %s -j ACCEPT || true\n", nodeExitDev)
 	fmt.Fprintf(&b, "PostDown = ip link del %s || true\n", nodeExitDev)
+
+	// Transparent-proxy hand-off (XKeen on Keenetic). Entirely conditional on the
+	// node actually having XKeen installed — the guard is evaluated on the node at
+	// bring-up, so the panel needs to know nothing about it and a node without
+	// XKeen renders these lines as no-ops.
+	//
+	// XKeen only intercepts what the firmware has already marked as belonging to a
+	// routing policy, and the firmware marks by input interface (its own LAN
+	// bridge, SSTP) or by registered MAC. Our tunnel is neither: it is created
+	// outside ndm, so exit traffic reaches the WAN having never been offered to
+	// the proxy. Tagging it with XKeen's proxy DSCP (its `dscp_proxy`, 63/0x3f by
+	// default) is the one hook that does not collide with the exit path's own
+	// connmark.
+	//
+	// The OUTPUT rule is the other half, and it is not optional: once the proxy
+	// intercepts a connection, the reply to the client is generated locally by the
+	// proxy rather than forwarded, so it never passes PREROUTING and never gets the
+	// exit connmark restored. It would then follow the main table into the tunnel
+	// with a foreign source address and be dropped by the hub, whose AllowedIPs for
+	// this node cover only its own /32 and LANs. Re-marking locally-originated
+	// replies of already-marked connections puts them back on the IPIP path. The
+	// connmark match keeps the scope tight: without it we would stamp the mark on
+	// unrelated firmware traffic and break its own policy routing.
+	//
+	// Both are checked with -C before being added: ndm rebuilds netfilter on every
+	// WAN flap and our hook replays these lines, so a blind -I/-A would pile up a
+	// duplicate on each rebuild.
+	xkeenGuard := "[ -x /opt/etc/init.d/S05xkeen ]"
+	xkeenDSCP := fmt.Sprintf("-t mangle %%s PREROUTING -i %s -j DSCP --set-dscp %s", nodeExitDev, nodeXkeenDSCP)
+	xkeenMark := fmt.Sprintf("-t mangle %%s OUTPUT -m connmark --mark %s -j MARK --set-mark %s", nodeExitMark, nodeExitMark)
+	for _, r := range []string{xkeenDSCP, xkeenMark} {
+		add := "-I"
+		if strings.Contains(r, "OUTPUT") {
+			add = "-A" // ordering matters only for PREROUTING, which must precede XKeen's own hooks
+		}
+		fmt.Fprintf(&b, "PostUp = %s && { iptables %s 2>/dev/null || iptables %s; } || true\n",
+			xkeenGuard, fmt.Sprintf(r, "-C"), fmt.Sprintf(r, add))
+		fmt.Fprintf(&b, "PostDown = iptables %s || true\n", fmt.Sprintf(r, "-D"))
+	}
 
 	fmt.Fprintf(&b, "\n# hub\n[Peer]\n")
 	fmt.Fprintf(&b, "PublicKey = %s\n", hub.Keys.Public)
